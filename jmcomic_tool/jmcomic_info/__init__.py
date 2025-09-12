@@ -462,6 +462,8 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str) -> UniMe
     if photo_curr == "":
         photo_curr = 1
     photo_num = len(album.episode_list)
+    # 总页数
+    page_count = len(cl.get_photo_detail(album_id).page_arr)
     logger.info(f"本子信息 {album_id}", arparma.header_result, session=session)
     await MessageUtils.build_message([path,
                                       f'本子信息:\n'
@@ -471,7 +473,8 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str) -> UniMe
                                       f'* 登场人物: {actor_str}\n'
                                       f'* tags: {tag_str}\n'
                                       f'* 章节标题: {photo_title}\n'
-                                      f'当前为第 {photo_curr} 章, 总章节数: {photo_num}'
+                                      f'* 页数: {page_count}\n'
+                                      f'当前为第 {photo_curr} 章, 总章节数: {photo_num}\n'
                                       f'本插件及其相关已在GitHub开源, 详见: https://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev']).send(
         reply_to=True)
 
