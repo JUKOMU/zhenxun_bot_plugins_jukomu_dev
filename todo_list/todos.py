@@ -262,6 +262,9 @@ class Todo(Model):
     @classmethod
     @dispatch('Todo')
     async def finish(cls, todo: 'Todo') -> bool:
+        """
+        设置待办事项为已完成
+        """
         todo.status = str(TodoStatus.COMPLETED)
         todo.index = -1
         return await cls.update_todo(todo)
@@ -269,11 +272,17 @@ class Todo(Model):
     @classmethod
     @dispatch(int)
     async def finish(cls, id: int):
+        """
+        设置待办事项为已完成
+        """
         return await cls.update_todo(id=id, index=-1, status=str(TodoStatus.COMPLETED))
 
     @classmethod
     @dispatch('Todo')
     async def paused(cls, todo: 'Todo') -> bool:
+        """
+        设置待办事项为已暂停
+        """
         todo.status = str(TodoStatus.PAUSED)
         todo.index = 0
         return await cls.update_todo(todo)
@@ -281,21 +290,33 @@ class Todo(Model):
     @classmethod
     @dispatch(int)
     async def paused(cls, id: int):
+        """
+        设置待办事项为已暂停
+        """
         return await cls.update_todo(id=id, index=0, status=str(TodoStatus.PAUSED))
 
     @classmethod
     @dispatch('Todo')
     async def pending(cls, todo: 'Todo') -> bool:
+        """
+        设置待办事项为待处理
+        """
         todo.status = str(TodoStatus.PENDING)
         return await cls.update_todo(todo)
 
     @classmethod
     @dispatch(int)
     async def pending(cls, id: int):
+        """
+        设置待办事项为待处理
+        """
         return await cls.update_todo(id=id, status=str(TodoStatus.PENDING))
 
     @classmethod
     async def change_index(cls, id: int, index: int) -> bool:
+        """
+        改变待办顺序
+        """
         try:
             todo1 = await cls.get_todo(id=id)
             todo2 = await cls.get(index=index)

@@ -1,12 +1,11 @@
-from jmcomic import JmOption
+from arclet.alconna import Arg
 from nonebot.adapters.onebot.v11 import Bot
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import to_me
 from nonebot_plugin_alconna import Alconna, Args, Arparma, on_alconna
 from nonebot_plugin_uninfo import Uninfo
-from zhenxun.configs.utils import BaseBlock, PluginCdBlock, PluginExtraData
-from zhenxun.services.log import logger
-from zhenxun.utils.message import MessageUtils
+
+from zhenxun.configs.utils import PluginExtraData
 
 __plugin_meta__ = PluginMetadata(
     name="待办列表",
@@ -27,67 +26,56 @@ __plugin_meta__ = PluginMetadata(
 _info_matcher1 = on_alconna(
     Alconna("Todo"), priority=5, block=True, rule=to_me()
 )
+
 _info_matcher2 = on_alconna(
     Alconna("待办"), priority=5, block=True, rule=to_me()
 )
+
 _info_matcher3 = on_alconna(
     Alconna("待办列表"), priority=5, block=True, rule=to_me()
+)
+
+_add_matcher = on_alconna(
+    Alconna("添加待办", Args["content", str], separators=' '), priority=5, block=True, rule=to_me()
+)
+
+_change_matcher1 = on_alconna(
+    Alconna("更改顺序", Args[Arg("id", int), Arg("index", int)], separators=' '), priority=5, block=True, rule=to_me()
+)
+
+_change_matcher2 = on_alconna(
+    Alconna("更改状态", Args[Arg("id", int), Arg("status", str)], separators=' '), priority=5, block=True, rule=to_me()
 )
 
 
 @_info_matcher1.handle()
 @_info_matcher2.handle()
 @_info_matcher3.handle()
-async def _(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str):
-    op = JmOption.default()
-    cl = op.new_jm_client()
-    album = cl.get_album_detail(album_id)
-    episode_list = sorted(album.episode_list, key=lambda x: int(x[1]))
-    if len(episode_list) == 1:
-        await (MessageUtils.build_message([f'本子信息:\n'
-                                           f'* [{album.id}]\n'
-                                           f'* {album.authoroname}\n'
-                                           f'没有其他章节\n'
-                                           f'本插件及其相关已在GitHub开源, 详见: https://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev'])
-               .send(reply_to=True))
-        logger.info(f"本子信息 {album_id}", arparma.header_result, session=session)
-        return
-    # 构造章节信息
-    photo_id = ""
-    photo_curr = ""
-    photo_title = ""
-    photo_num = len(album.episode_list)
-    for i, value in enumerate(episode_list):
-        # 章节编号
-        photo_id = value[0]
-        if photo_id == album_id:
-            # 章节序号
-            photo_curr = value[1]
-            # 章节标题
-            photo_title = value[2]
-            break
-    # 获取本子信息(第一个章节的信息)
-    real_album_id = episode_list[0][0]
-    real_album = cl.get_album_detail(real_album_id)
+async def _(bot: Bot, session: Uninfo, arparma: Arparma):
+    """
+    获取待办列表
+    """
+    pass
 
-    # 构造全部章节信息
-    photo_info_str = ""
-    for i, value in enumerate(episode_list):
-        # 章节编号
-        id = value[0]
-        # 章节序号
-        curr = value[1]
-        # 章节标题
-        title = value[2]
-        photo_info_str = photo_info_str + f'[{id}] 第{curr}章 {title}\n'
 
-    await (MessageUtils.build_message([f'本子信息:\n'
-                                       f'* [{real_album.id}]\n'
-                                       f'* {real_album.authoroname}\n'
-                                       f'本子章节信息 [{album_id}]:\n'
-                                       f'* 章节标题: {photo_title}\n'
-                                       f'* 当前为第 {photo_curr} 章, 总章节数: {photo_num}\n'
-                                       f'{photo_info_str}\n'
-                                       f'本插件及其相关已在GitHub开源, 详见: https://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev'])
-           .send(reply_to=True))
-    logger.info(f"本子信息 {album_id}", arparma.header_result, session=session)
+@_add_matcher.handle()
+async def __(bot: Bot, session: Uninfo, arparma: Arparma, content: str):
+    """
+    添加待办
+    """
+    pass
+
+
+@_change_matcher1.handle()
+async def ___(bot: Bot, session: Uninfo, arparma: Arparma, id: int, index: int):
+    """
+    改变待办顺序
+    """
+    pass
+
+@_change_matcher2.handle()
+async def ____(bot: Bot, session: Uninfo, arparma: Arparma, id: int, status: str):
+    """
+    改变待办状态
+    """
+    pass
