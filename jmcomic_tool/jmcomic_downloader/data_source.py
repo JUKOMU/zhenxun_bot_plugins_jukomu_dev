@@ -118,7 +118,7 @@ class JmDownload:
                 )
             )
             await asyncio.to_thread(
-                jmcomic.download_album, album_id, option, callback=cls.call_send
+                jmcomic.download_photo, album_id, option, callback=cls.call_send
             )
 
 
