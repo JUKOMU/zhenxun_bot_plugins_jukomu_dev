@@ -1,11 +1,9 @@
 from enum import Enum
-from typing import Any, Coroutine
 
 from tortoise import Tortoise
 from tortoise import fields
 from zhenxun.services.db_context import Model
 from zhenxun.services.log import logger
-from multipledispatch import dispatch
 
 
 class TodoStatus(Enum):
@@ -66,6 +64,7 @@ class Todo(Model):
     created_at = fields.DatetimeField(auto_now_add=True)
     """创建时间"""
     updated_at = fields.DatetimeField(auto_now=True)
+    """更新时间"""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -107,7 +106,6 @@ class Todo(Model):
         return add.id
 
     @classmethod
-    @dispatch(int)
     async def get_todo(cls, id: int):
         """获取待办
 
@@ -123,21 +121,19 @@ class Todo(Model):
         except Exception:
             return None
 
+    # @classmethod
+    # async def get_todo(cls, todo: 'Todo'):
+    #     """获取待办
+    #
+    #     参数:
+    #         待办id
+    #
+    #     返回:
+    #         待办事项
+    #     """
+    #     return await cls.get_todo(todo.id)
+
     @classmethod
-    @dispatch('Todo')
-    async def get_todo(cls, todo: 'Todo'):
-        """获取待办
-
-        参数:
-            待办id
-
-        返回:
-            待办事项
-        """
-        return await cls.get_todo(todo.id)
-
-    @classmethod
-    @dispatch(int)
     async def delete_todo(cls, id: int) -> bool:
         """删除待办
 
@@ -152,21 +148,19 @@ class Todo(Model):
             return True
         return False
 
+    # @classmethod
+    # async def delete_todo(cls, todo: 'Todo') -> bool:
+    #     """删除待办
+    #
+    #     参数:
+    #         待办id
+    #
+    #     返回:
+    #         bool: 是否删除成功
+    #     """
+    #     return await cls.delete_todo(todo.id)
+
     @classmethod
-    @dispatch('Todo')
-    async def delete_todo(cls, todo: 'Todo') -> bool:
-        """删除待办
-
-        参数:
-            待办id
-
-        返回:
-            bool: 是否删除成功
-        """
-        return await cls.delete_todo(todo.id)
-
-    @classmethod
-    @dispatch(int, int, str, str)
     async def update_todo(cls, id: int, index: int | None = None, content: str | None = None,
                           status: str | None = None) -> bool:
         """更新待办
@@ -206,15 +200,14 @@ class Todo(Model):
             return True
         return False
 
-    @classmethod
-    @dispatch('Todo')
-    async def update_todo(cls, todo: 'Todo') -> bool:
-        """更新待办
-
-        参数:
-            Todo实体
-        """
-        return await cls.update_todo(todo.id, todo.index, todo.content, todo.status)
+    # @classmethod
+    # async def update_todo(cls, todo: 'Todo') -> bool:
+    #     """更新待办
+    #
+    #     参数:
+    #         Todo实体
+    #     """
+    #     return await cls.update_todo(todo.id, todo.index, todo.content, todo.status)
 
     @classmethod
     async def get_all_todos(cls) -> list['Todo']:
@@ -259,53 +252,47 @@ class Todo(Model):
                 todo_lst.append(todo)
         return todo_lst
 
-    @classmethod
-    @dispatch('Todo')
-    async def finish(cls, todo: 'Todo') -> bool:
-        """
-        设置待办事项为已完成
-        """
-        todo.status = str(TodoStatus.COMPLETED)
-        todo.index = -1
-        return await cls.update_todo(todo)
+    # @classmethod
+    # async def finish(cls, todo: 'Todo') -> bool:
+    #     """
+    #     设置待办事项为已完成
+    #     """
+    #     todo.status = str(TodoStatus.COMPLETED)
+    #     todo.index = -1
+    #     return await cls.update_todo(todo)
 
     @classmethod
-    @dispatch(int)
     async def finish(cls, id: int):
         """
         设置待办事项为已完成
         """
         return await cls.update_todo(id=id, index=-1, status=str(TodoStatus.COMPLETED))
 
-    @classmethod
-    @dispatch('Todo')
-    async def paused(cls, todo: 'Todo') -> bool:
-        """
-        设置待办事项为已暂停
-        """
-        todo.status = str(TodoStatus.PAUSED)
-        todo.index = 0
-        return await cls.update_todo(todo)
+    # @classmethod
+    # async def paused(cls, todo: 'Todo') -> bool:
+    #     """
+    #     设置待办事项为已暂停
+    #     """
+    #     todo.status = str(TodoStatus.PAUSED)
+    #     todo.index = 0
+    #     return await cls.update_todo(todo)
 
     @classmethod
-    @dispatch(int)
     async def paused(cls, id: int):
         """
         设置待办事项为已暂停
         """
         return await cls.update_todo(id=id, index=0, status=str(TodoStatus.PAUSED))
 
-    @classmethod
-    @dispatch('Todo')
-    async def pending(cls, todo: 'Todo') -> bool:
-        """
-        设置待办事项为待处理
-        """
-        todo.status = str(TodoStatus.PENDING)
-        return await cls.update_todo(todo)
+    # @classmethod
+    # async def pending(cls, todo: 'Todo') -> bool:
+    #     """
+    #     设置待办事项为待处理
+    #     """
+    #     todo.status = str(TodoStatus.PENDING)
+    #     return await cls.update_todo(todo)
 
     @classmethod
-    @dispatch(int)
     async def pending(cls, id: int):
         """
         设置待办事项为待处理
