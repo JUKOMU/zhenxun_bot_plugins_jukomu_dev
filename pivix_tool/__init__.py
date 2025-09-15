@@ -2,7 +2,7 @@ import configparser
 import os
 import time
 from pathlib import Path
-
+import img2pdf
 import html2text
 import requests
 from arclet.alconna import Arg
@@ -62,7 +62,7 @@ __plugin_meta__ = PluginMetadata(
     description="使用pid获取图片, 使用pid获取图片信息, 使用画师id获取画师信息",
     usage="""
     指令：
-        1. 根据pid获取图片, 图片大小可选参数S、M、L, 默认M,序号可选参数, 默认1
+        1. 根据pid获取图片, 图片大小可选参数S、M、L, 默认M, 序号可选参数, 默认1, 使用all获取所有插画
         pid [插画id]<图片大小> <序号>
         2. 解析pid对应作品信息, 返回包含图片直链, 使用可选参数序号控制图片直链指向作品对应顺序的插画
         pinfo [插画id] <序号>
@@ -84,6 +84,8 @@ __plugin_meta__ = PluginMetadata(
           pid 90457556 2
          获取第二张插画, 大图
           pid 90457556L 2
+         获取所有插画
+          pid 90457556 all
         2.
          解析pid=90457556的作品信息, 包含第一张插画的图片直链
           pinfo 90457556
@@ -285,6 +287,8 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
     pages = None
     # 页码
     page_no = None
+    # 图片代理链接
+    image_url_proxy = ""
     if metadata_response:
         # 解析图片信息
         try:
@@ -306,61 +310,100 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
                     return
                 page_no = index.result
 
-            if page_no != "1":
-                image_url = image_url.replace("_p0", f"_p{int(page_no) - 1}")
+            # if page_no != "1" and page_no != "all":
+            #     image_url = image_url.replace("_p0", f"_p{int(page_no) - 1}")
 
             image_url_proxy = image_url.replace("i.pximg.net", "i.pixiv.cat")
-
 
         except Exception:
             await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
             logger.info("pid解析失败")
-
+    # 构建页码表
+    page_nos = []
+    # 构建回复信息
+    msg = []
     try:
-        suffix = ""
-        if pages > 1:
-            suffix = f"-{page_no}"
-        output_filename = f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
-        path = Path() / f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
-        if path.exists():
-            logger.info(f"  └──> 图片已存在")
-            try:
-                # 发送图片
-                await (MessageUtils.build_message([Path() / f"{BASE_PATH}/{illust_id}{suffix}{flag}.png",
-                                                   f"{tile}\n",
-                                                   f"* 作者: {author_name}/{author_id}\n",
-                                                   f"{page_no}/{pages}", ])
-                       .send(reply_to=False))
-                logger.info(f"pid解析 {illust_id}", arparma.header_result, session=session)
-                return
-            except Exception as e:
-                raise Exception(e)
-        image_bytes = call_proxy(
-            method="GET",
-            target_url=image_url_proxy,
-            return_format='binary'
-        )
-        if image_bytes:
-            # 将获取到的二进制数据保存为文件
-            try:
-                with open(output_filename, "wb") as f:
-                    f.write(image_bytes)
-                logger.info(f"pid图片保存成功: {illust_id}")
-                # 发送图片
-                await (MessageUtils.build_message([Path() / f"{BASE_PATH}/{illust_id}{suffix}{flag}.png",
-                                                   f"{tile}\n",
-                                                   f"* 作者: {author_name}/{author_id}\n",
-                                                   f"{page_no}/{pages}", ])
-                       .send(reply_to=False))
-                logger.info(f"pid解析 {illust_id}", arparma.header_result, session=session)
-            except IOError as e:
-                logger.error(f"pid图片保存失败, {e}")
-                raise Exception()
+        if page_no != "all":
+            page_nos.append(page_no)
         else:
-            raise Exception()
+            page_nos = [str(x) for x in int(pages)]
+        for page_no in page_nos:
+            suffix = ""
+            if pages > 1:
+                suffix = f"-{page_no}"
+            output_filename = f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
+            path = Path() / f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
+            if not path.exists():
+                image_url_proxy_2 = image_url_proxy.replace("_p0", f"_p{int(page_no) - 1}")
+                # 下载图片
+                image_bytes = call_proxy(
+                    method="GET",
+                    target_url=image_url_proxy_2,
+                    return_format='binary'
+                )
+                if not image_bytes:
+                    raise Exception()
+                # 将获取到的二进制数据保存为文件
+                try:
+                    with open(output_filename, "wb") as f:
+                        f.write(image_bytes)
+                    logger.info(f"pid图片保存成功: {illust_id}")
+                except IOError as e:
+                    logger.error(f"pid图片保存失败, {e}")
+                    raise Exception()
+            msg.append(path)
+        msg.append("\n")
+        msg.append(f"{tile}\n* 作者: {author_name}/{author_id}\n{page_no}/{pages}")
     except Exception:
         logger.error(f"pid获取图片失败: {illust_id}")
 
+    # 发送图片
+    try:
+        await MessageUtils.build_message(msg).send(reply_to=False)
+        logger.info(f"pid解析 {illust_id}", arparma.header_result, session=session)
+    except Exception:
+        # 发送失败(大概率是吞图了)
+        # 使用pdf发送
+        # 检查文件是否存在
+        files = []
+        pdf_file = ""
+        path = None
+        try:
+            if page_no != "all":
+                suffix = ""
+                if pages > 1:
+                    suffix = f"-{page_no}"
+                pdf_file = f"{BASE_PATH}/{illust_id}{suffix}{flag}.pdf"
+            else:
+                pdf_file = f"{BASE_PATH}/{illust_id}{flag}-all.pdf"
+            path = Path() / pdf_file
+            if not path.exists():
+                # 文件不存在
+                raise Exception()
+        except Exception:
+            for page_no in page_nos:
+                suffix = ""
+                if pages > 1:
+                    suffix = f"-{page_no}"
+                output_filename = f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
+                files.append(output_filename)
+            # 生成pdf
+            with open(pdf_file, "wb") as f:
+                f.write(img2pdf.convert(files))
+        if session.group.id:
+            await bot.call_api(
+                "upload_group_file",
+                group_id=session.group.id,
+                file=f"file:///{path.absolute()}",
+                name=f"{pdf_file}",
+            )
+        else:
+            await bot.call_api(
+                "upload_private_file",
+                user_id=session.user.id,
+                file=f"file:///{path.absolute()}",
+                name=f"{pdf_file}",
+            )
 
 @_info_matcher2.handle()
 async def __(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: Match[str]):

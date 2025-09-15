@@ -145,8 +145,8 @@ async def __(bot: Bot, session: Uninfo, arparma: Arparma, command: str, arg: Mat
         if len(list1) == 0:
             return await MessageUtils.build_message(["没有要更新的公告"]).send(reply_to=True)
         list1.sort(key=lambda x: x.id)
-        VERSION_2_NEW = VERSION_2
-        VERSION_3_NEW = VERSION_3
+        VERSION_2_NEW = str(int(VERSION_2))
+        VERSION_3_NEW = str(int(VERSION_3))
         for item in list1:
             type = item.type
             if type == AnnouncementType.NEW_FEATURE.value:
