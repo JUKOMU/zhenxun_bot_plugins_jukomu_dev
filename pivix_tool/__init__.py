@@ -140,8 +140,8 @@ _update_matcher = on_alconna(
 )
 
 
-def call_proxy(method: str, target_url: str, query_params=None | dict, json_body=None | dict,
-               custom_headers=None | dict, cookies=None | dict,
+def call_proxy(method: str, target_url: str, query_params: dict | None = None, json_body: dict | None = None,
+               custom_headers: dict | None = None, cookies: dict | None = None,
                return_format: str = 'json'):
     """
     通过一个安全的代理服务器向指定的目标 URL 发送 HTTP 请求。
@@ -318,92 +318,94 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
         except Exception:
             await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
             logger.info("pid解析失败")
-    # 构建页码表
-    page_nos = []
-    # 构建回复信息
-    msg = []
-    try:
+        # 构建页码表
+        page_nos = []
         if page_no != "all":
             page_nos.append(page_no)
         else:
-            page_nos = [str(x) for x in int(pages)]
-        for page_no in page_nos:
+            page_nos = [str(x) for x in range(1, int(pages) + 1)]
+
+        # --- 步骤1: 专注于下载和收集文件路径 ---
+        downloaded_files = []  # 用于存储所有成功下载的图片文件的绝对路径
+        msg_elements = []  # 用于构建最终消息体
+
+        for current_page in page_nos:
             suffix = ""
             if pages > 1:
-                suffix = f"-{page_no}"
+                suffix = f"-{current_page}"
             output_filename = f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
-            path = Path() / f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
+            path = Path(output_filename)
+
             if not path.exists():
-                image_url_proxy_2 = image_url_proxy.replace("_p0", f"_p{int(page_no) - 1}")
-                # 下载图片
+                image_url_proxy_2 = image_url_proxy.replace("_p0", f"_p{int(current_page) - 1}")
                 image_bytes = call_proxy(
                     method="GET",
                     target_url=image_url_proxy_2,
                     return_format='binary'
                 )
                 if not image_bytes:
-                    raise Exception()
-                # 将获取到的二进制数据保存为文件
+                    logger.warning(f"下载PID {illust_id} 的第 {current_page} 页失败")
+                    continue
                 try:
                     with open(output_filename, "wb") as f:
                         f.write(image_bytes)
-                    logger.info(f"pid图片保存成功: {illust_id}")
+                    logger.info(f"pid图片保存成功: {illust_id} -p{current_page}")
                 except IOError as e:
                     logger.error(f"pid图片保存失败, {e}")
-                    raise Exception()
-            msg.append(path)
-        msg.append("\n")
-        msg.append(f"{tile}\n* 作者: {author_name}/{author_id}\n{page_no}/{pages}")
-    except Exception:
-        logger.error(f"pid获取图片失败: {illust_id}")
+                    continue
 
-    # 发送图片
-    try:
-        await MessageUtils.build_message(msg).send(reply_to=False)
-        logger.info(f"pid解析 {illust_id}", arparma.header_result, session=session)
-    except Exception:
-        # 发送失败(大概率是吞图了)
-        # 使用pdf发送
-        # 检查文件是否存在
-        files = []
-        pdf_file = ""
-        path = None
+            # 无论文件是已存在还是刚下载，都将其绝对路径加入列表
+            absolute_path = path.absolute()
+            downloaded_files.append(str(absolute_path))
+            msg_elements.append(path)  # 同时加入消息元素列表
+
+        # --- 步骤2: 检查是否有可发送的内容 ---
+        if not downloaded_files:
+            logger.error(f"pid获取图片失败: {illust_id}，所有图片都下载失败。")
+            await MessageUtils.build_message(["图片下载失败，无法发送。"]).send(reply_to=True)
+            return
+
+        # 添加描述文本
+        msg_elements.append("\n")
+        msg_elements.append(f"{tile}\n* 作者: {author_name}/{author_id}\n共 {pages} 页")
+
+        # --- 步骤3: 尝试发送图片，如果失败则转为PDF ---
         try:
-            if page_no != "all":
-                suffix = ""
-                if pages > 1:
-                    suffix = f"-{page_no}"
-                pdf_file = f"{BASE_PATH}/{illust_id}{suffix}{flag}.pdf"
-            else:
-                pdf_file = f"{BASE_PATH}/{illust_id}{flag}-all.pdf"
-            path = Path() / pdf_file
-            if not path.exists():
-                # 文件不存在
-                raise Exception()
-        except Exception:
-            for page_no in page_nos:
-                suffix = ""
-                if pages > 1:
-                    suffix = f"-{page_no}"
-                output_filename = f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
-                files.append(output_filename)
-            # 生成pdf
-            with open(pdf_file, "wb") as f:
-                f.write(img2pdf.convert(files))
-        if session.group.id:
-            await bot.call_api(
-                "upload_group_file",
-                group_id=session.group.id,
-                file=f"file:///{path.absolute()}",
-                name=f"{pdf_file}",
-            )
-        else:
-            await bot.call_api(
-                "upload_private_file",
-                user_id=session.user.id,
-                file=f"file:///{path.absolute()}",
-                name=f"{pdf_file}",
-            )
+            logger.info("尝试直接发送图片...")
+            await MessageUtils.build_message(msg_elements).send(reply_to=False)
+            logger.info(f"pid解析 {illust_id} [图片发送成功]", arparma.header_result, session=session)
+        except Exception as e:
+            logger.warning(f"直接发送图片失败: {e}. 尝试转为PDF发送...")
+
+            try:
+                # 定义PDF文件名
+                pdf_name_suffix = f"-{page_no}" if len(page_nos) == 1 else "-all"
+                pdf_file_path = Path(f"{BASE_PATH}/{illust_id}{flag}{pdf_name_suffix}.pdf")
+
+                # 使用已有的 downloaded_files 列表创建PDF
+                with open(pdf_file_path, "wb") as f:
+                    f.write(img2pdf.convert(downloaded_files))
+                logger.info(f"PDF创建成功: {pdf_file_path}")
+
+                # 发送PDF文件
+                if session.group:
+                    await bot.upload_group_file(
+                        group_id=session.group.id,
+                        file=str(pdf_file_path.absolute()),
+                        name=pdf_file_path.name,
+                    )
+                else:
+                    await bot.upload_private_file(
+                        user_id=session.user.id,
+                        file=str(pdf_file_path.absolute()),
+                        name=pdf_file_path.name,
+                    )
+                logger.info(f"pid解析 {illust_id} [PDF发送成功]", arparma.header_result, session=session)
+
+            except Exception as pdf_e:
+                # 如果连PDF都发送失败，就只回复一条错误信息
+                logger.error(f"发送PDF也失败了: {pdf_e}")
+                await MessageUtils.build_message(["图片发送失败，尝试转为PDF文件发送也失败了。"]).send(reply_to=True)
 
 @_info_matcher2.handle()
 async def __(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: Match[str]):
