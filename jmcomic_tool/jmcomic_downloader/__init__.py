@@ -22,7 +22,6 @@ __plugin_meta__ = PluginMetadata(
     指令2：
         对Jm信息回复"@机器人 下载"会下载该信息jm号对应的本子
         见"Jm信息"插件
-    
     """.strip(),
     extra=PluginExtraData(
         author="JUKOMU",
