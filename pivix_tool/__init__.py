@@ -1,4 +1,5 @@
 import configparser
+import io
 import os
 import time
 from pathlib import Path
@@ -13,6 +14,7 @@ from nonebot_plugin_uninfo import Uninfo
 from zhenxun.configs.utils import BaseBlock, PluginCdBlock, PluginExtraData
 from zhenxun.services.log import logger
 from zhenxun.utils.message import MessageUtils
+from PIL import Image, ImageDraw, ImageFont
 
 BASE_PATH = "resources/pivix/image"
 HTMLTOTEXT = html2text.HTML2Text()
@@ -84,8 +86,14 @@ __plugin_meta__ = PluginMetadata(
           pid 90457556 2
          获取第二张插画, 大图
           pid 90457556L 2
-         获取所有插画
+         获取所有插画, 图片大小参数仍可用
           pid 90457556 all
+          pid 90457556L all
+         获取插画并以pdf文件发送, 图片大小参数仍可用
+          pid 90457556 pdf
+          pid 90457556L 2 pdf
+          pid 90457556 all pdf
+          pid 90457556L all pdf
         2.
          解析pid=90457556的作品信息, 包含第一张插画的图片直链
           pinfo 90457556
@@ -120,7 +128,7 @@ __plugin_meta__ = PluginMetadata(
 )
 
 _info_matcher1 = on_alconna(
-    Alconna("pid", Args[Arg("illust_id", str), Arg("index?", str)], separators=' '), priority=5, block=True
+    Alconna("pid", Args[Arg("illust_id", str), Arg("index?", str), Arg("is_pdf?", str)], separators=' '), priority=5, block=True
 )
 
 _info_matcher2 = on_alconna(
@@ -243,7 +251,7 @@ def call_proxy(method: str, target_url: str, query_params: dict | None = None, j
 
 
 @_info_matcher1.handle()
-async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: Match[str]):
+async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: Match[str], is_pdf: Match[str]):
     if session.group:
         if not validate_permission(session):
             return
@@ -256,6 +264,7 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
         if str(flag).isdigit():
             flag = 'M'
 
+    # 图片元数据
     metadata_api_url = f"https://www.pixiv.net/ajax/illust/{illust_id}"
     get_params = {'lang': 'zh'}
     get_headers = {
@@ -272,8 +281,12 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
         query_params=get_params,
         custom_headers=get_headers,
         cookies=get_cookies,
-        return_format='json'  # 明确指定需要 JSON
+        return_format='json'
     )
+
+    if not metadata_response:
+        await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
+        logger.info("pid解析失败")
 
     # 作者ID
     author_id = None
@@ -289,123 +302,141 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
     page_no = None
     # 图片代理链接
     image_url_proxy = ""
-    if metadata_response:
-        # 解析图片信息
-        try:
-            author_id = metadata_response['body']['body']['userId']
-            author_name = metadata_response['body']['body']['userName']
+
+    # 解析图片信息
+    try:
+        author_id = metadata_response['body']['body']['userId']
+        author_name = metadata_response['body']['body']['userName']
+        image_url = metadata_response['body']['body']['urls']['regular']
+        if flag == 'S':
+            image_url = metadata_response['body']['body']['urls']['small']
+        if flag == 'M':
             image_url = metadata_response['body']['body']['urls']['regular']
-            if flag == 'S':
-                image_url = metadata_response['body']['body']['urls']['small']
-            if flag == 'M':
-                image_url = metadata_response['body']['body']['urls']['regular']
-            if flag == 'L':
-                image_url = metadata_response['body']['body']['urls']['original']
-            tile = metadata_response['body']['body']['illustTitle']
-            pages = metadata_response['body']['body']['pageCount']
-            page_no = "1"
-            if index.available:
-                if not index.result:
-                    # 页码无效
-                    return
+        if flag == 'L':
+            image_url = metadata_response['body']['body']['urls']['original']
+        tile = metadata_response['body']['body']['illustTitle']
+        pages = metadata_response['body']['body']['pageCount']
+        page_no = "1"
+        if index.available:
+            if index.result:
                 page_no = index.result
+        # 图片反代链接
+        image_url_proxy = image_url.replace("i.pximg.net", "i.pixiv.cat")
+    except Exception:
+        await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
+        logger.info("pid解析失败")
 
-            # if page_no != "1" and page_no != "all":
-            #     image_url = image_url.replace("_p0", f"_p{int(page_no) - 1}")
+    # 构建页码表
+    page_nos = []
+    if page_no != "all" and page_no != "pdf" and page_no.isdigit():
+        # 页码参数有效
+        page_nos.append(page_no)
+    elif page_no == "pdf":
+        # 没有页码参数有pdf参数
+        page_nos.append("1")
+    elif page_no == "all":
+        # 页码参数为all
+        page_nos = [str(x) for x in range(1, int(pages) + 1)]
+    else:
+        # 无效参数默认返回第一张图片
+        page_no = "1"
+        page_nos.append("1")
 
-            image_url_proxy = image_url.replace("i.pximg.net", "i.pixiv.cat")
+    # 图片列表
+    downloaded_files = []
+    # 消息列表
+    msg_elements = []
 
-        except Exception:
-            await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
-            logger.info("pid解析失败")
-        # 构建页码表
-        page_nos = []
-        if page_no != "all":
-            page_nos.append(page_no)
-        else:
-            page_nos = [str(x) for x in range(1, int(pages) + 1)]
+    for current_page in page_nos:
+        suffix = ""
+        if pages > 1:
+            suffix = f"-{current_page}"
+        output_filename = f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
+        path = Path(output_filename)
 
-        # --- 步骤1: 专注于下载和收集文件路径 ---
-        downloaded_files = []  # 用于存储所有成功下载的图片文件的绝对路径
-        msg_elements = []  # 用于构建最终消息体
-
-        for current_page in page_nos:
-            suffix = ""
-            if pages > 1:
-                suffix = f"-{current_page}"
-            output_filename = f"{BASE_PATH}/{illust_id}{suffix}{flag}.png"
-            path = Path(output_filename)
-
-            if not path.exists():
-                image_url_proxy_2 = image_url_proxy.replace("_p0", f"_p{int(current_page) - 1}")
-                image_bytes = call_proxy(
-                    method="GET",
-                    target_url=image_url_proxy_2,
-                    return_format='binary'
-                )
-                if not image_bytes:
-                    logger.warning(f"下载PID {illust_id} 的第 {current_page} 页失败")
-                    continue
-                try:
-                    with open(output_filename, "wb") as f:
-                        f.write(image_bytes)
-                    logger.info(f"pid图片保存成功: {illust_id} -p{current_page}")
-                except IOError as e:
-                    logger.error(f"pid图片保存失败, {e}")
-                    continue
-
-            # 无论文件是已存在还是刚下载，都将其绝对路径加入列表
-            absolute_path = path.absolute()
-            downloaded_files.append(str(absolute_path))
-            msg_elements.append(path)  # 同时加入消息元素列表
-
-        # --- 步骤2: 检查是否有可发送的内容 ---
-        if not downloaded_files:
-            logger.error(f"pid获取图片失败: {illust_id}，所有图片都下载失败。")
-            await MessageUtils.build_message(["图片下载失败，无法发送。"]).send(reply_to=True)
-            return
-
-        # 添加描述文本
-        msg_elements.append("\n")
-        msg_elements.append(f"{tile}\n* 作者: {author_name}/{author_id}\n共 {pages} 页")
-
-        # --- 步骤3: 尝试发送图片，如果失败则转为PDF ---
-        try:
-            logger.info("尝试直接发送图片...")
-            await MessageUtils.build_message(msg_elements).send(reply_to=False)
-            logger.info(f"pid解析 {illust_id} [图片发送成功]", arparma.header_result, session=session)
-        except Exception as e:
-            logger.warning(f"直接发送图片失败: {e}. 尝试转为PDF发送...")
-
+        if not path.exists():
+            image_url_proxy_2 = image_url_proxy.replace("_p0", f"_p{int(current_page) - 1}")
+            image_bytes = call_proxy(
+                method="GET",
+                target_url=image_url_proxy_2,
+                return_format='binary'
+            )
+            if not image_bytes:
+                logger.warning(f"下载PID {illust_id} 的第 {current_page} 页失败")
+                continue
             try:
-                # 定义PDF文件名
-                pdf_name_suffix = f"-{page_no}" if len(page_nos) == 1 else "-all"
-                pdf_file_path = Path(f"{BASE_PATH}/{illust_id}{flag}{pdf_name_suffix}.pdf")
+                with open(output_filename, "wb") as f:
+                    f.write(image_bytes)
+                logger.info(f"pid图片保存成功: {illust_id} -p{current_page}")
+            except IOError as e:
+                logger.error(f"pid图片保存失败, {e}")
+                continue
 
+        absolute_path = path.absolute()
+        downloaded_files.append(str(absolute_path))
+        msg_elements.append(path)
+
+    if not downloaded_files:
+        logger.error(f"pid获取图片失败: {illust_id}，所有图片都下载失败。")
+        await MessageUtils.build_message(["图片下载失败，无法发送。"]).send(reply_to=True)
+        return
+
+    # 添加描述文本
+    msg_elements.append("\n")
+    msg_elements.append(f"{tile}\n* 作者: {author_name}/{author_id}\n共 {pages} 页")
+
+    # 尝试发送图片, 如果失败则转为PDF
+    try:
+
+        # 处理需要直接发送pdf的情况
+        if page_no == "pdf":
+            raise Exception
+        if is_pdf.available:
+            if str(is_pdf.result) == "pdf":
+                raise Exception
+
+        logger.info("尝试直接发送图片...")
+        await MessageUtils.build_message(msg_elements).send(reply_to=False)
+        logger.info(f"pid解析 {illust_id} [图片发送成功]", arparma.header_result, session=session)
+    except Exception as e:
+        logger.warning(f"直接发送图片失败: {e}. 尝试转为PDF发送...")
+
+        # 构建插件信息图片
+        info_text = "本插件及其相关已在GitHub开源, 详见:\nhttps://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev"
+        info_page_bytes = create_text_image(info_text)
+        if info_page_bytes:
+            downloaded_files.append(info_page_bytes)
+
+        try:
+            # 定义PDF文件名
+            pdf_name_suffix = f"-{page_no}" if len(page_nos) == 1 else "-all"
+            pdf_file_path = Path(f"{BASE_PATH}/{illust_id}{flag}{pdf_name_suffix}.pdf")
+            # 先判断文件是否存在
+            if not pdf_file_path.exists():
                 # 使用已有的 downloaded_files 列表创建PDF
                 with open(pdf_file_path, "wb") as f:
                     f.write(img2pdf.convert(downloaded_files))
                 logger.info(f"PDF创建成功: {pdf_file_path}")
 
-                # 发送PDF文件
-                if session.group:
-                    await bot.upload_group_file(
-                        group_id=session.group.id,
-                        file=str(pdf_file_path.absolute()),
-                        name=pdf_file_path.name,
-                    )
-                else:
-                    await bot.upload_private_file(
-                        user_id=session.user.id,
-                        file=str(pdf_file_path.absolute()),
-                        name=pdf_file_path.name,
-                    )
-                logger.info(f"pid解析 {illust_id} [PDF发送成功]", arparma.header_result, session=session)
+            # 发送PDF文件
+            if session.group:
+                await bot.upload_group_file(
+                    group_id=session.group.id,
+                    file=str(pdf_file_path.absolute()),
+                    name=pdf_file_path.name,
+                )
+            else:
+                await bot.upload_private_file(
+                    user_id=session.user.id,
+                    file=str(pdf_file_path.absolute()),
+                    name=pdf_file_path.name,
+                )
+            logger.info(f"pid解析 {illust_id} [PDF发送成功]", arparma.header_result, session=session)
 
-            except Exception as pdf_e:
-                # 如果连PDF都发送失败，就只回复一条错误信息
-                logger.error(f"发送PDF也失败了: {pdf_e}")
-                await MessageUtils.build_message(["图片发送失败，尝试转为PDF文件发送也失败了。"]).send(reply_to=True)
+        except Exception as pdf_e:
+            # PDF发送失败，就只回复一条错误信息
+            logger.error(f"发送PDF也失败了: {pdf_e}")
+            await MessageUtils.build_message(["图片发送失败，尝试转为PDF文件发送也失败了。"]).send(reply_to=True)
 
 @_info_matcher2.handle()
 async def __(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: Match[str]):
@@ -637,3 +668,52 @@ def validate_permission(session: Uninfo) -> bool:
             return False
         return True
     return True
+
+
+def create_text_image(text_content: str, width: int = 800, height: int = 600) -> bytes | None:
+    """
+    根据给定的文本内容创建一张图片，并返回其二进制数据。
+
+    Args:
+        text_content (str): 要显示在图片上的文字。
+        width (int): 图片宽度。
+        height (int): 图片高度。
+
+    Returns:
+        bytes | None: 成功时返回图片的PNG格式二进制数据，失败则返回None。
+    """
+    try:
+        # 确定字体文件路径 (假设字体文件和 __init__.py 在同一目录)
+        font_path = os.path.join(os.path.dirname(__file__), "msyh.ttc")  # <--- 修改为您自己的字体文件名
+
+        # 加载字体，如果找不到则使用Pillow默认字体（不支持中文）
+        try:
+            font = ImageFont.truetype(font_path, size=24)
+        except IOError:
+            logger.warning(f"字体文件未找到: {font_path}，将使用默认字体（可能无法显示中文）")
+            font = ImageFont.load_default()
+
+        # 创建一张白色背景的图片
+        image = Image.new("RGB", (width, height), "white")
+        draw = ImageDraw.Draw(image)
+
+        # 计算文字应放置的位置（居中）
+        # 使用 textbbox 获取精确的边界框
+        text_bbox = draw.textbbox((0, 0), text_content, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        position = ((width - text_width) / 2, (height - text_height) / 2)
+
+        # 将文字绘制到图片上
+        draw.text(position, text_content, fill="black", font=font)
+
+        # 将图片保存到内存中的二进制IO流
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='PNG')
+
+        # 返回二进制数据
+        return img_byte_arr.getvalue()
+
+    except Exception as e:
+        logger.error(f"创建文本图片时发生错误: {e}")
+        return None
