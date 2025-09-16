@@ -9,10 +9,11 @@ from jmcomic import *
 from nonebot.adapters.onebot.v11 import Bot
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import to_me
-from nonebot_plugin_alconna import Alconna, Args, Arparma, on_alconna, Match
 from nonebot_plugin_uninfo import Uninfo
 from zhenxun.configs.utils import BaseBlock, PluginCdBlock, PluginExtraData
 from zhenxun.utils.message import MessageUtils
+from nonebot_plugin_alconna import Alconna, Args, Arparma, on_alconna, Match
+from ..jmcomic_info import get_jm_info
 
 from .data_source import *
 
@@ -249,6 +250,11 @@ async def _(bot: Bot,
         await (MessageUtils.build_message([f"没有搜索结果"])
                .send(reply_to=True))
         return
+
+    if len(page.search_page_detail.get_albums()) == 1:
+        album_id = page.search_page_detail.get_albums()[0].get_album_id()
+        # 只有一个搜索结果则返回该结果的jm信息
+        return await get_jm_info(bot, session, arparma, album_id)
 
     img = await page.create_page_img()
     if img is None:

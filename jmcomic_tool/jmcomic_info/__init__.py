@@ -406,7 +406,7 @@ async def __(bot: Bot, session: Uninfo, arparma: Arparma, album_id: UniMessage):
 
 @_matcher.handle()
 @_info_matcher.handle()
-async def _(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str) -> UniMessage:
+async def get_jm_info(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str) -> UniMessage:
     group_id = session.group.id if session.group else None
     album_data = DataForAlbum()
     await JmDownload.download_avatar(bot, session.user.id, group_id, album_id, album_data)

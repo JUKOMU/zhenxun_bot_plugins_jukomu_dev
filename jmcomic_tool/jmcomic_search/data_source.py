@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -248,39 +249,121 @@ class JmSearchPageManager:
     async def create_page_img(self):
         """
         创建包含搜索结果信息的图片。
-        布局为4列列表，列优先排序，每项包含封面、ID、标题和标签。
+        画布尺寸固定，内部元素会根据内容数量动态、居中、等比例放大，确保封面和背景无拉伸。
         """
         search_page_detail = await self.get_page_info()
         if not search_page_detail or not search_page_detail.get_albums():
-            logger.error("没有专辑信息可供生成图片。")
+            logger.error("没有本子信息可供生成图片。")
             return None
 
-        # --- 1. 参数配置 ---
-        # 布局与尺寸
-        COVER_SIZE = (150, 200)  # 封面尺寸 (宽, 高)
-        TEXT_AREA_WIDTH = 500  # 文本区域宽度
-        ITEM_WIDTH = COVER_SIZE[0] + TEXT_AREA_WIDTH  # 单个项目总宽度
-        ITEM_HEIGHT = COVER_SIZE[1]  # 单个项目总高度
-        COLS = 4  # 列数
-        ITEMS_PER_COL = 20  # 每列最大项目数
-        COLUMN_SPACING = 50  # 列间距
-        ROW_SPACING = 30  # 项目垂直间距
-        PADDING = 100  # 画布四周内边距
-        FOOTER_HEIGHT = 120  # 底部页码区域高度
+        # --- 辅助函数区 ---
+        def resize_and_crop_background(img: Image.Image, target_size: tuple[int, int]) -> Image.Image:
+            """等比例缩放背景图至刚好覆盖目标尺寸，然后居中裁剪。"""
+            # (此函数保持不变，以防背景图尺寸不匹配)
+            target_width, target_height = target_size
+            target_ratio = target_width / target_height
+            img_width, img_height = img.size
+            img_ratio = img_width / img_height
+            if img_ratio > target_ratio:
+                scale_factor = target_height / img_height
+                scaled_width, scaled_height = int(img_width * scale_factor), target_height
+                img = img.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+                left = (scaled_width - target_width) // 2
+                img = img.crop((left, 0, left + target_width, scaled_height))
+            else:
+                scale_factor = target_width / img_width
+                scaled_width, scaled_height = target_width, int(img_height * scale_factor)
+                img = img.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+                top = (scaled_height - target_height) // 2
+                img = img.crop((0, top, scaled_width, top + target_height))
+            return img
 
-        # 背景颜色和圆角半径
-        GLOBAL_BG_COLOR = (0, 0, 0, 20)  # 全局大背景颜色 (浅灰, 半透明)
-        ITEM_BG_COLOR = (0, 0, 0, 30)  # 单个项目背景颜色 (白色, 更透明)
-        GLOBAL_BG_RADIUS = 30  # 全局背景圆角半径
-        ITEM_BG_RADIUS = 20  # 项目背景圆角半径
+        def resize_cover_to_fill(img: Image.Image, target_size: tuple[int, int]) -> Image.Image:
+            """等比例缩放封面图至刚好填满目标尺寸框，然后居中裁剪，确保无拉伸。"""
+            # (此函数对于保证封面比例至关重要)
+            target_width, target_height = target_size
+            target_ratio = target_width / target_height
+            img_width, img_height = img.size
+            img_ratio = img_width / img_height
+            if img_ratio > target_ratio:
+                scale_factor = target_height / img_height
+                scaled_width, scaled_height = int(img_width * scale_factor), target_height
+                img = img.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+                left = (scaled_width - target_width) // 2
+                return img.crop((left, 0, left + target_width, scaled_height))
+            else:
+                scale_factor = target_width / img_width
+                scaled_width, scaled_height = target_width, int(img_height * scale_factor)
+                img = img.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+                top = (scaled_height - target_height) // 2
+                return img.crop((0, top, scaled_width, top + target_height))
 
-        # 字体颜色
-        FONT_COLOR = (0, 0, 0)
-        ID_FONT_COLOR = (80, 80, 80)
-        TAGS_FONT_COLOR = (20, 90, 180)
-        PAGE_FONT_COLOR = (10, 115, 212)
+        # --- 1. 定义基准尺寸和最大布局 ---
+        albums = search_page_detail.get_albums()
+        num_albums = len(albums)
 
-        # --- 2. 文本截断辅助函数 ---
+        # 基准尺寸（所有计算的基础）
+        BASE_COVER_SIZE = (150, 200)  # 严格 3:4
+        BASE_TEXT_AREA_WIDTH = 500
+        BASE_ITEM_WIDTH = BASE_COVER_SIZE[0] + BASE_TEXT_AREA_WIDTH
+        BASE_ITEM_HEIGHT = BASE_COVER_SIZE[1]
+        BASE_ITEMS_PER_COL = 20
+        BASE_COLUMN_SPACING = 50
+        BASE_ROW_SPACING = 30
+        BASE_PADDING = 100
+        BASE_FOOTER_HEIGHT = 120
+
+        # 字体基准大小
+        BASE_ID_FONT_SIZE = 36
+        BASE_TITLE_FONT_SIZE = 20
+        BASE_TAGS_FONT_SIZE = 22
+        BASE_PAGE_FONT_SIZE = 97
+
+        # 最大布局参数
+        MAX_COLS = 4
+
+        # --- 2. 计算固定画布尺寸 ---
+        # 画布尺寸永远基于最大布局来计算，确保其大小恒定
+        max_content_width = (BASE_ITEM_WIDTH * MAX_COLS) + (BASE_COLUMN_SPACING * (MAX_COLS - 1))
+        max_content_height = (BASE_ITEM_HEIGHT * BASE_ITEMS_PER_COL) + (BASE_ROW_SPACING * (BASE_ITEMS_PER_COL - 1))
+        canvas_width = max_content_width + 2 * BASE_PADDING
+        canvas_height = max_content_height + BASE_PADDING + BASE_FOOTER_HEIGHT
+
+        # --- 3. 计算动态缩放因子和布局 ---
+        if num_albums == 0:
+            actual_cols = 1
+            rows_in_tallest_column = 1
+        else:
+            rows_in_tallest_column = min(num_albums, BASE_ITEMS_PER_COL)
+            actual_cols = math.ceil(num_albums / BASE_ITEMS_PER_COL)
+
+        # 计算实际内容在未缩放时应有的宽度
+        actual_unscaled_content_width = (BASE_ITEM_WIDTH * actual_cols) + (BASE_COLUMN_SPACING * (actual_cols - 1))
+
+        # 核心逻辑：计算缩放因子，让实际内容宽度填满最大内容宽度
+        scale_factor = max_content_width / actual_unscaled_content_width
+
+        # --- 4. 应用缩放因子，生成最终尺寸 ---
+        COVER_SIZE = (int(BASE_COVER_SIZE[0] * scale_factor), int(BASE_COVER_SIZE[1] * scale_factor))
+        TEXT_AREA_WIDTH = int(BASE_TEXT_AREA_WIDTH * scale_factor)
+        ITEM_WIDTH = COVER_SIZE[0] + TEXT_AREA_WIDTH
+        ITEM_HEIGHT = COVER_SIZE[1]
+        COLUMN_SPACING = int(BASE_COLUMN_SPACING * scale_factor)
+        ROW_SPACING = int(BASE_ROW_SPACING * scale_factor)
+        ID_FONT_SIZE = int(BASE_ID_FONT_SIZE * scale_factor)
+        TITLE_FONT_SIZE = int(BASE_TITLE_FONT_SIZE * scale_factor)
+        TAGS_FONT_SIZE = int(BASE_TAGS_FONT_SIZE * scale_factor)
+        # 注意：外边距和页脚不需要缩放，它们是画布的一部分
+        PADDING = BASE_PADDING
+        FOOTER_HEIGHT = BASE_FOOTER_HEIGHT
+        PAGE_FONT_SIZE = BASE_PAGE_FONT_SIZE
+
+        # 计算垂直居中的偏移量
+        scaled_content_height = (ITEM_HEIGHT * rows_in_tallest_column) + (ROW_SPACING * (rows_in_tallest_column - 1))
+        vertical_offset = (max_content_height - scaled_content_height) // 2
+
+        # --- 5. 创建画布和绘制 ---
+        # (此部分及之后的文本截断函数保持不变)
         def _get_title_lines(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
             """将标题处理为最多两行，第二行超长则截断。"""
             lines = []
@@ -329,123 +412,94 @@ class JmSearchPageManager:
             # 如果连一个字符都放不下，就只返回省略号
             return ellipsis
 
-        # --- 3. 计算画布尺寸与创建画布 ---
-        content_width = (ITEM_WIDTH * COLS) + (COLUMN_SPACING * (COLS - 1))
-        content_height = (ITEM_HEIGHT * ITEMS_PER_COL) + (ROW_SPACING * (ITEMS_PER_COL - 1))
-
-        canvas_width = content_width + 2 * PADDING
-        canvas_height = content_height + PADDING + FOOTER_HEIGHT  # 顶部 PADDING + 内容区 + 底部页码区
-
-        # 加载背景并缩放到目标尺寸
+        # 加载背景
         try:
-
-            canvas_base = Image.open(
+            canvas_base_raw = Image.open(
                 os.path.dirname(os.path.abspath(__file__)) + "/jmcomic_favourite_background.png").convert("RGBA")
-            canvas_base = canvas_base.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+            canvas_base = resize_and_crop_background(canvas_base_raw, (canvas_width, canvas_height))
         except FileNotFoundError:
             logger.error("背景图片 'jmcomic_favourite_background.png' 未找到，使用纯白背景。")
             canvas_base = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 255))
 
-        # 创建透明绘图层
         canvas = Image.new("RGBA", canvas_base.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(canvas)
 
-        # --- 4. 加载字体 ---
+        # 加载字体
         try:
-            # 字体大小可以根据视觉效果微调
-            id_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/msyh.ttc", 36)
-            title_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/msyh.ttc", 20)
-            tags_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/msyh.ttc", 22)
-            page_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/baibaipanpanwudikeai.ttf", 97)
+            id_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/msyh.ttc", ID_FONT_SIZE)
+            title_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/msyh.ttc", TITLE_FONT_SIZE)
+            tags_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/msyh.ttc", TAGS_FONT_SIZE)
+            page_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/baibaipanpanwudikeai.ttf",
+                                           PAGE_FONT_SIZE)
         except IOError:
             logger.error("字体文件加载失败，将使用默认字体。")
             id_font = title_font = tags_font = page_font = ImageFont.load_default()
 
-        # --- 5. 绘制全局背景 ---
-        # 计算全局背景的位置和尺寸，它应该包裹住所有的项目
-        global_bg_x0 = PADDING - 25  # 比内容区稍微宽一点
-        global_bg_y0 = PADDING - 25  # 比内容区稍微高一点
-        global_bg_x1 = global_bg_x0 + content_width + 50
-        global_bg_y1 = global_bg_y0 + content_height + 50
-
+        # 绘制全局背景 (基于最大布局)
+        GLOBAL_BG_RADIUS = 30  # 固定圆角半径可能效果更好
+        ITEM_BG_RADIUS = 20
+        GLOBAL_BG_COLOR = (0, 0, 0, 20)
+        ITEM_BG_COLOR = (0, 0, 0, 30)
         draw.rounded_rectangle(
-            (global_bg_x0, global_bg_y0, global_bg_x1, global_bg_y1),
-            radius=GLOBAL_BG_RADIUS,
-            fill=GLOBAL_BG_COLOR
+            (PADDING - 25, PADDING - 25, PADDING + max_content_width + 25, PADDING + max_content_height + 25),
+            radius=GLOBAL_BG_RADIUS, fill=GLOBAL_BG_COLOR
         )
 
-        # --- 6. 循环绘制所有项目 ---
-        albums = search_page_detail.get_albums()
+        # 循环绘制所有项目
         for index, album in enumerate(albums):
-            # 计算当前项目所在的行列 (列优先)
-            col = index // ITEMS_PER_COL
-            row = index % ITEMS_PER_COL
+            col = index // BASE_ITEMS_PER_COL
+            row = index % BASE_ITEMS_PER_COL
 
-            # 计算当前项目的左上角坐标
+            # 核心：所有坐标都基于缩放后的尺寸，并应用垂直偏移
             item_x = PADDING + col * (ITEM_WIDTH + COLUMN_SPACING)
-            item_y = PADDING + row * (ITEM_HEIGHT + ROW_SPACING)
+            item_y = PADDING + row * (ITEM_HEIGHT + ROW_SPACING) + vertical_offset
 
-            # --- 绘制单个项目背景 ---
-            # 背景需要稍微比项目内容大一点点，形成边框效果
-            item_bg_x0 = item_x - 10
-            item_bg_y0 = item_y - 10
-            item_bg_x1 = item_x + ITEM_WIDTH + 10
-            item_bg_y1 = item_y + ITEM_HEIGHT + 10
-
+            # 绘制单个项目背景
             draw.rounded_rectangle(
-                (item_bg_x0, item_bg_y0, item_bg_x1, item_bg_y1),
-                radius=ITEM_BG_RADIUS,
-                fill=ITEM_BG_COLOR
+                (item_x - 10, item_y - 10, item_x + ITEM_WIDTH + 10, item_y + ITEM_HEIGHT + 10),
+                radius=ITEM_BG_RADIUS, fill=ITEM_BG_COLOR
             )
 
             # 绘制封面
             try:
-                cover_img = Image.open(BytesIO(album.get_cover())).convert("RGB").resize(COVER_SIZE)
+                cover_img_raw = Image.open(BytesIO(album.get_cover())).convert("RGB")
+                cover_img = resize_cover_to_fill(cover_img_raw, COVER_SIZE)
                 canvas.paste(cover_img, (item_x, item_y))
             except Exception as e:
-                # 封面加载失败时显示红色占位
                 logger.error(f"警告: 封面加载失败 for {album.get_album_id()}. Error: {e}")
                 placeholder = Image.new('RGB', COVER_SIZE, (255, 80, 80))
                 draw_placeholder = ImageDraw.Draw(placeholder)
                 draw_placeholder.text((10, 10), "Cover\nFailed", fill=(255, 255, 255))
                 canvas.paste(placeholder, (item_x, item_y))
 
-            # --- 绘制右侧文本信息 ---
-            text_x = item_x + COVER_SIZE[0] + 20  # 封面右侧+20px间距
-            text_max_width = TEXT_AREA_WIDTH - 40  # 文本区域宽度-左右边距
-            current_y = item_y + 15  # 文本起始Y坐标
+            # 绘制右侧文本信息
+            text_x = item_x + COVER_SIZE[0] + int(20 * scale_factor)  # 间距也需要缩放
+            text_max_width = TEXT_AREA_WIDTH - int(40 * scale_factor)
+            current_y = item_y + int(15 * scale_factor)
 
-            # 绘制 Album ID
-            draw.text((text_x, current_y), album.get_album_id(), font=id_font, fill=ID_FONT_COLOR)
-            current_y += id_font.size + 20  # 增加行距
+            draw.text((text_x, current_y), album.get_album_id(), font=id_font, fill=(80, 80, 80))
+            current_y += id_font.size + int(20 * scale_factor)
 
-            # 绘制 Title (截断)
             title_lines = _get_title_lines(album.get_title(), title_font, text_max_width)
             for line in title_lines:
-                draw.text((text_x, current_y), line, font=title_font, fill=FONT_COLOR)
-                current_y += title_font.size * 2  # 使用固定的行高
+                draw.text((text_x, current_y), line, font=title_font, fill=(0, 0, 0))
+                current_y += title_font.size * 2
 
-            current_y += 5  # 标题和标签之间的额外间距
+            current_y += int(5 * scale_factor)
 
-            # 绘制 Tags (合并后截断)
-            tags_str = " / ".join(album.get_tags())
-            if not tags_str:
-                tags_str = "无标签"
+            tags_str = " / ".join(album.get_tags()) or "无标签"
             truncated_tags = _truncate_text(tags_str, tags_font, text_max_width)
-            draw.text((text_x, current_y), truncated_tags, font=tags_font, fill=TAGS_FONT_COLOR)
+            draw.text((text_x, current_y), truncated_tags, font=tags_font, fill=(20, 90, 180))
 
-        # --- 7. 绘制页脚页码 ---
+        # 绘制页脚页码 (基于固定画布尺寸)
         page_text = f"{self.page} / {self.max_page}"
         page_text_length = page_font.getlength(page_text)
-        page_x = (canvas_width - page_text_length) // 2  # 水平居中
-        page_y = canvas_height - FOOTER_HEIGHT + (FOOTER_HEIGHT - page_font.size) // 2 + 10  # 垂直居中于页脚区域
+        page_x = (canvas_width - page_text_length) // 2
+        page_y = canvas_height - FOOTER_HEIGHT + (FOOTER_HEIGHT - PAGE_FONT_SIZE) // 2 + 10
+        draw.text((page_x, page_y), page_text, font=page_font, fill=(10, 115, 212))
 
-        draw.text((page_x, page_y), page_text, font=page_font, fill=PAGE_FONT_COLOR)
-
-        # --- 8. 合成并返回 ---
-
+        # 合成并返回
         result = Image.alpha_composite(canvas_base, canvas)
-
         final_for_show = Image.new("RGB", result.size, (255, 255, 255))
         final_for_show.paste(result, (0, 0), result)
 
