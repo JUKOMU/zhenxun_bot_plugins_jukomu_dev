@@ -1,3 +1,9 @@
+<p align="center">
+  <strong>中文</strong>
+  <span>&nbsp;</span>
+  <a href="./README.md">English</a>
+</p>
+
 # JUKOMU 的真寻 Bot 插件（JMComic & Pixiv 扩展）
 
 这是一个为 [真寻 Bot（zhenxun-bot）](https://github.com/zhenxun-org/zhenxun_bot) 开发的插件集合（基于 NoneBot2），主要新增了与 JMComic 和 Pixiv 相关的功能，用于增强媒体检索、搜索与内容推送能力。
