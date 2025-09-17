@@ -1,6 +1,7 @@
 <p align="center">
-  <a href="./README.zh.md"><img src="https://img.shields.io/badge/lang-简体中文-red.svg" alt="简体中文"></a>
-  <a href="./README.md"><img src="https://img.shields.io/badge/lang-English-blue.svg" alt="English"></a>
+  <a href="./README.zh.md">中文</a>
+  <span>&nbsp;</span>
+  <strong>English</strong>
 </p>
 
 # JUKOMU’s Zhenxun Bot Plugins (JMComic & Pixiv Extensions)
