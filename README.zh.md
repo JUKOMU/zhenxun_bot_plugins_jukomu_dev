@@ -6,6 +6,7 @@
 ## 上游项目：
 
   [![Readme Card](https://github-readme-stats.vercel.app/api/pin/?username=zhenxun-org&repo=zhenxun_bot)](https://github.com/zhenxun-org/zhenxun_bot)
+  [![Readme Card](https://github-readme-stats.vercel.app/api/pin/?username=hect0x7&repo=JMComic-Crawler-Python)]([https://github.com/zhenxun-org/zhenxun_bot](https://github.com/hect0x7/JMComic-Crawler-Python))
 
 ## 功能概览
 
