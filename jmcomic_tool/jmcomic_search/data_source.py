@@ -191,7 +191,10 @@ class JmSearchPageManager:
         if user is None and pwd is None:
             logger.info(f"Jm搜索插件未设置账密,部分受限本子无法搜索")
         else:
-            client.login(user, pwd)
+            try:
+                client.login(user, pwd)
+            except Exception:
+                pass
         # 构造搜索字符串
         search_str = self.get_search_str()
         # 进行查询
