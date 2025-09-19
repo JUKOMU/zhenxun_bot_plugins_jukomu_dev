@@ -150,9 +150,9 @@ async def __(bot: Bot, session: Uninfo, arparma: Arparma, command: str, arg: Mat
         for item in list1:
             type = item.type
             if type == AnnouncementType.NEW_FEATURE.value:
-                VERSION_2_NEW = str(int(VERSION_2) + 1)
+                VERSION_2_NEW = str(int(VERSION_2_NEW) + 1)
             if type == AnnouncementType.BUG_FIX.value or type == AnnouncementType.IMPROVEMENT.value or type == AnnouncementType.PERFORMANCE_UPDATE.value or type == AnnouncementType.SECURITY_UPDATE.value:
-                VERSION_3_NEW = str(int(VERSION_3) + 1)
+                VERSION_3_NEW = str(int(VERSION_3_NEW) + 1)
         config.set('Settings', 'version_1', VERSION_1)
         config.set('Settings', 'version_2', VERSION_2_NEW)
         config.set('Settings', 'version_3', VERSION_3_NEW)
