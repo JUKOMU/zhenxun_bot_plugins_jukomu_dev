@@ -10,15 +10,16 @@ import PIL
 import aiofiles
 from PIL.Image import Image
 from arclet.alconna import AllParam
+from jmcomic import MissingAlbumPhotoException
 from nonebot.adapters.onebot.v11 import Bot
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import to_me
 from nonebot_plugin_alconna import Alconna, Args, Arparma, on_alconna, UniMessage
 from nonebot_plugin_uninfo import Uninfo
+
 from zhenxun.configs.utils import PluginCdBlock, PluginExtraData
 from zhenxun.services.log import logger
 from zhenxun.utils.message import MessageUtils
-
 from .data_for_album import DataForAlbum
 from .data_source import JmDownload, cl, JmModuleConfig
 
@@ -405,12 +406,92 @@ async def __(bot: Bot, session: Uninfo, arparma: Arparma, album_id: UniMessage):
         )
 
 
-@_matcher.handle()
 @_info_matcher.handle()
 async def get_jm_info(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str) -> UniMessage:
     group_id = session.group.id if session.group else None
     album_data = DataForAlbum()
-    await JmDownload.download_avatar(bot, session.user.id, group_id, album_id, album_data)
+    try:
+        await JmDownload.download_avatar(bot, session.user.id, group_id, album_id, album_data)
+    except MissingAlbumPhotoException as e:
+        await MessageUtils.build_message(["本子不存在"]).send(
+            reply_to=True)
+    album = album_data.get_album()
+    album_jpg = f"{album_id}.jpg"
+    path = Path() / "resources" / "image" / "jmcomic" / album_jpg
+    await compress_image(path.absolute())
+
+    # 构造其他标题名
+    other_name = album.name.replace(album.oname, "")
+    other_name_result = re.sub(r'\[.*?\]', '', other_name)
+
+    # 构造作者信息
+    author_str = "["
+    for i, value in enumerate(album.authors):
+        if i == 0:
+            author_str = author_str + value
+        else:
+            author_str = author_str + ", " + value
+    author_str = author_str + "]"
+
+    # 构造登场人物信息
+    actor_str = "["
+    for i, value in enumerate(album.actors):
+        if i == 0:
+            actor_str = actor_str + value
+        else:
+            actor_str = actor_str + ", " + value
+    actor_str = actor_str + "]"
+
+    # 构造标签信息
+    tag_str = "["
+    for i, value in enumerate(album.tags):
+        if i == 0:
+            tag_str = tag_str + value
+        else:
+            tag_str = tag_str + ", " + value
+    tag_str = tag_str + "]"
+
+    # 构造章节信息
+    photo_id = ""
+    photo_curr = ""
+    photo_title = ""
+    for i, value in enumerate(album.episode_list):
+        # 章节编号
+        photo_id = value[0]
+        if photo_id == album_id:
+            # 章节序号
+            photo_curr = value[1]
+            # 章节标题
+            photo_title = value[2]
+            break
+    if photo_curr == "":
+        photo_curr = 1
+    photo_num = len(album.episode_list)
+    # 总页数
+    page_count = len(cl.get_photo_detail(album_id).page_arr)
+    logger.info(f"本子信息 {album_id}", arparma.header_result, session=session)
+    await MessageUtils.build_message([path,
+                                      f'本子信息:\n'
+                                      f'* [{album.id}]\n'
+                                      f'* {album.authoroname}/{other_name_result.strip()}\n'
+                                      f'* 作者: {author_str}\n'
+                                      f'* 登场人物: {actor_str}\n'
+                                      f'* tags: {tag_str}\n'
+                                      f'* 章节标题: {photo_title}\n'
+                                      f'* 页数: {page_count}\n'
+                                      f'当前为第 {photo_curr} 章, 总章节数: {photo_num}\n'
+                                      f'本插件及其相关已在GitHub开源, 详见: https://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev']).send(
+        reply_to=True)
+
+
+@_matcher.handle()
+async def get_jm_info(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str) -> UniMessage | None:
+    group_id = session.group.id if session.group else None
+    album_data = DataForAlbum()
+    try:
+        await JmDownload.download_avatar(bot, session.user.id, group_id, album_id, album_data)
+    except MissingAlbumPhotoException as e:
+        return
     album = album_data.get_album()
     album_jpg = f"{album_id}.jpg"
     path = Path() / "resources" / "image" / "jmcomic" / album_jpg

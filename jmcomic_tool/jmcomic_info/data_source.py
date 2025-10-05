@@ -4,10 +4,10 @@ from pathlib import Path
 from typing import ClassVar
 
 import jmcomic
-from jmcomic import JmAlbumDetail, JmModuleConfig
+from jmcomic import JmAlbumDetail, JmModuleConfig, MissingAlbumPhotoException
 from nonebot.adapters.onebot.v11 import Bot
-from zhenxun.configs.path_config import DATA_PATH
 
+from zhenxun.configs.path_config import DATA_PATH
 from .data_for_album import DataForAlbum
 
 JPG_OUTPUT_PATH = "/resources/image/jmcomic"
@@ -67,6 +67,12 @@ class JmDownload:
         下载封面
         """
 
+        try:
+            detail = cl.get_album_detail(album_id)
+            album_data.set_album(detail)
+        except MissingAlbumPhotoException as e:
+            raise e
+
         url = f'https://{JmModuleConfig.DOMAIN_IMAGE_LIST[0]}/media/albums/{album_id}_3x4.jpg'
 
         cls.album_data = album_data
@@ -79,8 +85,6 @@ class JmDownload:
             )
         )
 
-        detail = cl.get_album_detail(album_id)
-        album_data.set_album(detail)
         filepath = Path() / "resources" / "image" / "jmcomic" / f"{album_id}.jpg"
         cover_path = filepath.absolute()
         if not Path(cover_path).exists():

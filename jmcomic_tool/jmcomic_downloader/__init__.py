@@ -1,5 +1,6 @@
 import re
 
+from jmcomic import MissingAlbumPhotoException
 from nonebot.adapters.onebot.v11 import Bot, MessageEvent
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import to_me
@@ -9,7 +10,7 @@ from zhenxun.configs.utils import BaseBlock, PluginCdBlock, PluginExtraData
 from zhenxun.services.log import logger
 from zhenxun.utils.message import MessageUtils
 
-from .data_source import JmDownload
+from .data_source import JmDownload, OPTION_FILE, option
 
 __plugin_meta__ = PluginMetadata(
     name="Jm下载器",
@@ -45,6 +46,12 @@ _info_matcher = on_alconna(
 
 @_matcher.handle()
 async def _(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str):
+    cl = option.new_jm_client()
+    try:
+        cl.get_album_detail(album_id)
+    except MissingAlbumPhotoException as e:
+        return await MessageUtils.build_message(["本子不存在"]).send(
+            reply_to=True)
     await MessageUtils.build_message("正在下载中，请稍后...\n"
                                      f"本插件及其相关已在GitHub开源, 详见: https://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev").send(
         reply_to=True)
