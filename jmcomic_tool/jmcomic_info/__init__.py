@@ -312,7 +312,8 @@ def create_image_gallery_html(image_paths, descriptions_data, filename="photo_ga
         current_timestamp = time.time()
         filepath = Path() / "resources" / "html" / "jmcomic" / f'{current_timestamp}.html'
         filename = filepath.absolute()
-
+        if not filepath.exists():
+            filepath.parent.mkdir(parents=True, exist_ok=True)
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(loader_html_to_write)
 
