@@ -245,7 +245,7 @@ async def _(bot: Bot,
     page = await JmSearchPageManager(search_params=search_params, filter_params=filter_params,
                                      page=page_result).async_init()
 
-    if page.max_page == 0:
+    if len(page.search_page_detail.get_albums()) == 0:
         # 没有搜索结果
         await (MessageUtils.build_message([f"没有搜索结果"])
                .send(reply_to=True))
@@ -254,7 +254,11 @@ async def _(bot: Bot,
     if len(page.search_page_detail.get_albums()) == 1:
         album_id = page.search_page_detail.get_albums()[0].get_album_id()
         # 只有一个搜索结果则返回该结果的jm信息
-        return await get_jm_info(bot, session, arparma, album_id)
+        try:
+            return await get_jm_info(bot, session, arparma, album_id)
+        except Exception as e:
+            # 无法直接发送封面则发送搜索结果图片
+            pass
 
     img = await page.create_page_img()
     if img is None:
