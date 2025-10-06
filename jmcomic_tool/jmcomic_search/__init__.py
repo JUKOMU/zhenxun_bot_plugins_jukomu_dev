@@ -4,6 +4,7 @@ from pathlib import Path
 import PIL
 import aiofiles
 import redis
+from PIL import ImageOps
 from PIL.Image import Image
 from arclet.alconna.args import Arg
 from jmcomic import *
@@ -17,8 +18,8 @@ from nonebot_plugin_uninfo import Uninfo
 from zhenxun.configs.utils import BaseBlock, PluginCdBlock, PluginExtraData
 from zhenxun.utils.message import MessageUtils
 from .data_source import *
-from ..jmcomic_info import get_jm_info
 from ..jmcomic_downloader import _ as jm_download
+from ..jmcomic_info import get_jm_info
 
 __plugin_meta__ = PluginMetadata(
     name="Jm搜索",
@@ -27,6 +28,7 @@ __plugin_meta__ = PluginMetadata(
     指令：
         jm搜索 [搜索内容,搜索项用+连接,屏蔽项用-连接] [页码]?
         默认过滤带AI绘画的tag
+        对jm搜索结果图片回复对应序号可以查看和下载对应本子
     示例：
         不带页码默认搜索第一页
             jm搜索 全彩+萝莉+...
@@ -276,9 +278,26 @@ async def _(bot: Bot,
     compress_img.save((Path() / f"{BASE_PATH}/{uid}.jpg").absolute())
 
     # 发送图片
-    msg = await (MessageUtils.build_message([Path() / f"{BASE_PATH}/{uid}.jpg"])
-                 .send(reply_to=True))
-    msg_id = msg.msg_ids[0].get('message_id')
+    try:
+        msg = await (MessageUtils.build_message([Path() / f"{BASE_PATH}/{uid}.jpg"])
+                     .send(reply_to=True))
+        msg_id = msg.msg_ids[0].get('message_id')
+    except Exception as e:
+        logger.error("发送jm搜索结果失败, 尝试发送反转图片", session=session, e=e)
+
+        # 如果原图发送失败，则尝试发送反转后的图片
+        try:
+            # 调用函数来反转并保存图片
+            reverse_img_path = await reverse_and_save_image(compress_img, Path() / f"{BASE_PATH}/{uid}.jpg")
+
+            # 发送反转后的图片
+            msg = await (MessageUtils.build_message([reverse_img_path])
+                         .send(reply_to=True))
+            msg_id = msg.msg_ids[0].get('message_id')
+            logger.info("JM搜索结果反转图片发送成功。")
+        except Exception as e_reverse:
+            logger.error("发送反转后的图片也失败了", session=session, e=e_reverse)
+
     # 缓存搜索结果
     try:
         cache = []
@@ -315,9 +334,9 @@ async def __(bot: Bot, session: Uninfo, event: MessageEvent, message: UniMsg):
     connect = redis.Redis(host='localhost', port=6379, decode_responses=True, password='eaANO/x?qwev**hdsxc??u)/?')
     if not connect.exists(message_id):
         return await (MessageUtils.build_message([f"缓存过期, 请重新搜索"])
-               .send(reply_to=True))
+                      .send(reply_to=True))
     list = connect.lrange(message_id, 0, -1)
-    a_id = list[index-1]
+    a_id = list[index - 1]
     try:
         await get_jm_info(bot, session, a_id)
     except Exception as e:
@@ -327,3 +346,31 @@ async def __(bot: Bot, session: Uninfo, event: MessageEvent, message: UniMsg):
     except Exception as e:
         logger.error("下载失败", session=session, e=e)
         return
+
+
+async def reverse_and_save_image(img: Image.Image, original_path: Path) -> Path:
+    """
+    垂直反转图片，并以'-reverse'后缀保存。
+
+    Args:
+        img (Image.Image): 原始的Pillow图片对象。
+        original_path (Path): 原始图片的保存路径。
+
+    Returns:
+        Path: 反转后图片的保存路径。
+    """
+    try:
+        # 垂直（上下）翻转图片
+        reversed_img = ImageOps.flip(img)
+
+        # 构建新的文件路径，例如 "123.jpg" -> "123-reverse.jpg"
+        reverse_stem = f"{original_path.stem}-reverse"
+        reverse_path = original_path.with_stem(reverse_stem)
+
+        # 保存反转后的图片
+        reversed_img.save(reverse_path.absolute())
+        logger.info(f"图片已反转并保存至: {reverse_path.absolute()}")
+        return reverse_path
+    except Exception as e:
+        logger.error(f"反转并保存图片时出错: {e}")
+        raise

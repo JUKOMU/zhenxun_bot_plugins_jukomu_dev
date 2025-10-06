@@ -8,7 +8,8 @@ from pathlib import Path
 
 import PIL
 import aiofiles
-from PIL.Image import Image
+from PIL import ImageOps
+from PIL import Image as PillowImage
 from arclet.alconna import AllParam
 from jmcomic import MissingAlbumPhotoException
 from nonebot.adapters.onebot.v11 import Bot
@@ -470,18 +471,37 @@ async def get_jm_info(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str
     # 总页数
     page_count = len(cl.get_photo_detail(album_id).page_arr)
     logger.info(f"本子信息 {album_id}", arparma.header_result, session=session)
-    await MessageUtils.build_message([path,
-                                      f'本子信息:\n'
-                                      f'* [{album.id}]\n'
-                                      f'* {album.authoroname}/{other_name_result.strip()}\n'
-                                      f'* 作者: {author_str}\n'
-                                      f'* 登场人物: {actor_str}\n'
-                                      f'* tags: {tag_str}\n'
-                                      f'* 章节标题: {photo_title}\n'
-                                      f'* 页数: {page_count}\n'
-                                      f'当前为第 {photo_curr} 章, 总章节数: {photo_num}\n'
-                                      f'本插件及其相关已在GitHub开源, 详见: https://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev']).send(
-        reply_to=True)
+    # 构建文本消息
+    text_content = (
+        f'本子信息:\n'
+        f'* [{album.id}]\n'
+        f'* {album.authoroname}/{other_name_result.strip()}\n'
+        f'* 作者: {author_str}\n'
+        f'* 登场人物: {actor_str}\n'
+        f'* tags: {tag_str}\n'
+        f'* 章节标题: {photo_title}\n'
+        f'* 页数: {page_count}\n'
+        f'当前为第 {photo_curr} 章, 总章节数: {photo_num}\n'
+        f'本插件及其相关已在GitHub开源, 详见: https://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev'
+    )
+
+    # 第一次尝试发送原图
+    try:
+        await MessageUtils.build_message([path, text_content]).send(reply_to=True)
+        logger.info(f"本子 {album_id} 信息及原图发送成功。")
+    except Exception as e:
+        logger.error(f"发送本子 {album_id} 信息失败，尝试发送反转图片。", e=e)
+
+        # 尝试反转图片并再次发送
+        reversed_path = await reverse_and_save_image(path)
+        if reversed_path:
+            try:
+                await MessageUtils.build_message([reversed_path, text_content]).send(reply_to=True)
+                logger.info(f"本子 {album_id} 信息及反转图片发送成功。")
+            except Exception as e_reverse:
+                logger.error(f"发送本子 {album_id} 的反转图片也失败了。", e=e_reverse)
+        else:
+            logger.error(f"未能创建本子 {album_id} 的反转图片，发送失败。")
 
 
 @_matcher.handle()
@@ -547,21 +567,41 @@ async def get_jm_info(bot: Bot, session: Uninfo, album_id: str) -> UniMessage | 
     # 总页数
     page_count = len(cl.get_photo_detail(album_id).page_arr)
     logger.info(f"本子信息 {album_id}", session=session)
-    await MessageUtils.build_message([path,
-                                      f'本子信息:\n'
-                                      f'* [{album.id}]\n'
-                                      f'* {album.authoroname}/{other_name_result.strip()}\n'
-                                      f'* 作者: {author_str}\n'
-                                      f'* 登场人物: {actor_str}\n'
-                                      f'* tags: {tag_str}\n'
-                                      f'* 章节标题: {photo_title}\n'
-                                      f'* 页数: {page_count}\n'
-                                      f'当前为第 {photo_curr} 章, 总章节数: {photo_num}\n'
-                                      f'本插件及其相关已在GitHub开源, 详见: https://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev']).send(
-        reply_to=True)
+    # 构建文本消息
+    text_content = (
+        f'本子信息:\n'
+        f'* [{album.id}]\n'
+        f'* {album.authoroname}/{other_name_result.strip()}\n'
+        f'* 作者: {author_str}\n'
+        f'* 登场人物: {actor_str}\n'
+        f'* tags: {tag_str}\n'
+        f'* 章节标题: {photo_title}\n'
+        f'* 页数: {page_count}\n'
+        f'当前为第 {photo_curr} 章, 总章节数: {photo_num}\n'
+        f'本插件及其相关已在GitHub开源, 详见: https://github.com/JUKOMU/zhenxun_bot_plugins_jukomu_dev'
+    )
+
+    # 第一次尝试发送原图
+    try:
+        await MessageUtils.build_message([path, text_content]).send(reply_to=True)
+        logger.info(f"本子 {album_id} 信息及原图发送成功。")
+    except Exception as e:
+        logger.error(f"发送本子 {album_id} 信息失败，尝试发送反转图片。", e=e)
+
+        # 尝试反转图片并再次发送
+        reversed_path = await reverse_and_save_image(path)
+        await compress_image(reversed_path.absolute(), target_kb=400)
+        if reversed_path:
+            try:
+                await MessageUtils.build_message([reversed_path, text_content]).send(reply_to=True)
+                logger.info(f"本子 {album_id} 信息及反转图片发送成功。")
+            except Exception as e_reverse:
+                logger.error(f"发送本子 {album_id} 的反转图片也失败了。", e=e_reverse)
+        else:
+            logger.error(f"未能创建本子 {album_id} 的反转图片，发送失败。")
 
 
-async def compress_image(image_path, target_kb=500, quality=95):
+async def compress_image(image_path, target_kb=1000, quality=95):
     """
     异步压缩指定路径的图片，使得压缩后文件大小不超过 target_kb KB，
     如果原文件小于目标大小则不做操作。压缩过程中保持原比例缩放，并尽可能保证图片质量。
@@ -633,3 +673,32 @@ def filter_duplicate_numbers(number_list):
             seen.add(num)
             unique_numbers.append(num)
     return unique_numbers
+
+
+async def reverse_and_save_image(original_path: Path) -> Path | None:
+    """
+    垂直反转图片，并以'-reverse'后缀保存。
+
+    Args:
+        original_path (Path): 原始图片的路径。
+
+    Returns:
+        Path | None: 成功则返回反转后图片的路径，否则返回None。
+    """
+    try:
+        # 打开原始图片
+        with PillowImage.open(original_path) as img:
+            # 垂直（上下）翻转图片
+            reversed_img = ImageOps.flip(img)
+
+            # 构建新的文件路径，例如 "123.jpg" -> "123-reverse.jpg"
+            reverse_stem = f"{original_path.stem}-reverse"
+            reverse_path = original_path.with_stem(reverse_stem)
+
+            # 保存反转后的图片
+            reversed_img.save(reverse_path.absolute())
+            logger.info(f"图片已反转并保存至: {reverse_path.absolute()}")
+            return reverse_path
+    except Exception as e:
+        logger.error(f"反转并保存图片时出错: {original_path}", e=e)
+        return None
