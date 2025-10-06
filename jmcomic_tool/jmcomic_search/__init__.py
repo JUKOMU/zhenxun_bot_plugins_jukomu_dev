@@ -3,19 +3,22 @@ from pathlib import Path
 
 import PIL
 import aiofiles
+import redis
 from PIL.Image import Image
 from arclet.alconna.args import Arg
 from jmcomic import *
-from nonebot.adapters.onebot.v11 import Bot
+from nonebot.adapters.onebot.v11 import Bot, MessageEvent
 from nonebot.plugin import PluginMetadata
+from nonebot.plugin.on import on_message
 from nonebot.rule import to_me
+from nonebot_plugin_alconna import Alconna, Args, Arparma, on_alconna, Match, UniMsg
 from nonebot_plugin_uninfo import Uninfo
+
 from zhenxun.configs.utils import BaseBlock, PluginCdBlock, PluginExtraData
 from zhenxun.utils.message import MessageUtils
-from nonebot_plugin_alconna import Alconna, Args, Arparma, on_alconna, Match
-from ..jmcomic_info import get_jm_info
-
 from .data_source import *
+from ..jmcomic_info import get_jm_info
+from ..jmcomic_downloader import _ as jm_download
 
 __plugin_meta__ = PluginMetadata(
     name="Jm搜索",
@@ -48,6 +51,8 @@ _matcher = on_alconna(
     Alconna("jm搜索", Args[Arg("search_str", str), Arg("page?", int)], separators=' '), priority=5, block=True,
     rule=to_me()
 )
+
+_index_matcher = on_message(rule=to_me(), priority=10)
 
 
 def parse_search_terms(search_str: str):
@@ -255,7 +260,7 @@ async def _(bot: Bot,
         album_id = page.search_page_detail.get_albums()[0].get_album_id()
         # 只有一个搜索结果则返回该结果的jm信息
         try:
-            return await get_jm_info(bot, session, arparma, album_id)
+            return await get_jm_info(bot, session, album_id)
         except Exception as e:
             # 无法直接发送封面则发送搜索结果图片
             pass
@@ -271,6 +276,54 @@ async def _(bot: Bot,
     compress_img.save((Path() / f"{BASE_PATH}/{uid}.jpg").absolute())
 
     # 发送图片
-    await (MessageUtils.build_message([Path() / f"{BASE_PATH}/{uid}.jpg"])
-           .send(reply_to=True))
+    msg = await (MessageUtils.build_message([Path() / f"{BASE_PATH}/{uid}.jpg"])
+                 .send(reply_to=True))
+    msg_id = msg.msg_ids[0].get('message_id')
+    # 缓存搜索结果
+    try:
+        cache = []
+        for album in page.search_page_detail.get_albums():
+            album_id = album.get_album_id()
+            cache.append(album_id)
+        connect = redis.Redis(host='localhost', port=6379, decode_responses=True, password='xxx')
+        connect.rpush(msg_id, *cache)
+        connect.expire(msg_id, 24 * 60 * 60)
+    except Exception as e:
+        print(e)
+        logger.info(f"jm搜索缓存失败", arparma.header_result, session=session)
     logger.info(f"jm搜索 {search_str}", arparma.header_result, session=session)
+
+
+@_index_matcher.handle()
+async def __(bot: Bot, session: Uninfo, event: MessageEvent, message: UniMsg):
+    index = message.extract_plain_text()
+    if not str(index).isdigit():
+        return
+    index = int(index)
+    msg = await bot.get_msg(message_id=event.message_id)
+    # 获取消息内容
+    match = re.search(r'\[CQ:reply,id=(\d+)\]', msg.get('raw_message'))
+    reply_msg = await bot.get_msg(message_id=match.group(1))
+    message_id = reply_msg.get('message_id')
+    match2 = re.search(r'\[CQ:reply,id=(\d+)\]', reply_msg.get('raw_message'))
+    reply_msg2 = await bot.get_msg(message_id=match2.group(1))
+    text_content = reply_msg2.get('raw_message')
+    # 判断是否需要回复
+    match = re.search(r'jm搜索', text_content)
+    if not match:
+        return
+    connect = redis.Redis(host='localhost', port=6379, decode_responses=True, password='eaANO/x?qwev**hdsxc??u)/?')
+    if not connect.exists(message_id):
+        return await (MessageUtils.build_message([f"缓存过期, 请重新搜索"])
+               .send(reply_to=True))
+    list = connect.lrange(message_id, 0, -1)
+    a_id = list[index-1]
+    try:
+        await get_jm_info(bot, session, a_id)
+    except Exception as e:
+        logger.error("发送jm信息失败", session=session, e=e)
+    try:
+        return await jm_download(bot, session, None, a_id)
+    except Exception as e:
+        logger.error("下载失败", session=session, e=e)
+        return

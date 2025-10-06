@@ -485,7 +485,7 @@ async def get_jm_info(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str
 
 
 @_matcher.handle()
-async def get_jm_info(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str) -> UniMessage | None:
+async def get_jm_info(bot: Bot, session: Uninfo, album_id: str) -> UniMessage | None:
     group_id = session.group.id if session.group else None
     album_data = DataForAlbum()
     try:
@@ -546,7 +546,7 @@ async def get_jm_info(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str
     photo_num = len(album.episode_list)
     # 总页数
     page_count = len(cl.get_photo_detail(album_id).page_arr)
-    logger.info(f"本子信息 {album_id}", arparma.header_result, session=session)
+    logger.info(f"本子信息 {album_id}", session=session)
     await MessageUtils.build_message([path,
                                       f'本子信息:\n'
                                       f'* [{album.id}]\n'

@@ -61,7 +61,7 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str):
 
 
 @_info_matcher.handle()
-async def _(bot: Bot, session: Uninfo, arparma: Arparma, event: MessageEvent):
+async def __(bot: Bot, session: Uninfo, arparma: Arparma, event: MessageEvent):
     msg = await bot.get_msg(message_id=event.message_id)
     # 获取消息内容
     match = re.search(r'\[CQ:reply,id=(\d+)\]', msg.get('raw_message'))

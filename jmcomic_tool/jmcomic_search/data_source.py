@@ -365,6 +365,7 @@ class JmSearchPageManager:
         ID_FONT_SIZE = int(BASE_ID_FONT_SIZE * scale_factor)
         TITLE_FONT_SIZE = int(BASE_TITLE_FONT_SIZE * scale_factor)
         TAGS_FONT_SIZE = int(BASE_TAGS_FONT_SIZE * scale_factor)
+        ORDINAL_FONT_SIZE = int(ITEM_HEIGHT * 0.85)  # 新增：序号字体大小
 
         #  计算居中偏移量
         scaled_content_width = (ITEM_WIDTH * actual_cols) + (COLUMN_SPACING * (actual_cols - 1))
@@ -420,14 +421,15 @@ class JmSearchPageManager:
         draw = ImageDraw.Draw(canvas)
 
         try:
-            id_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/msyh.ttc", ID_FONT_SIZE)
-            title_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/msyh.ttc", TITLE_FONT_SIZE)
-            tags_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/msyh.ttc", TAGS_FONT_SIZE)
-            page_font = ImageFont.truetype(os.path.dirname(os.path.abspath(__file__)) + "/baibaipanpanwudikeai.ttf",
-                                           BASE_PAGE_FONT_SIZE)
+            font_path = os.path.dirname(os.path.abspath(__file__))
+            id_font = ImageFont.truetype(font_path + "/msyh.ttc", ID_FONT_SIZE)
+            title_font = ImageFont.truetype(font_path + "/msyh.ttc", TITLE_FONT_SIZE)
+            tags_font = ImageFont.truetype(font_path + "/msyh.ttc", TAGS_FONT_SIZE)
+            page_font = ImageFont.truetype(font_path + "/baibaipanpanwudikeai.ttf", BASE_PAGE_FONT_SIZE)
+            ordinal_font = ImageFont.truetype(font_path + "/msyh.ttc", ORDINAL_FONT_SIZE)  # 新增：加载序号字体
         except IOError:
             logger.error("字体文件加载失败，使用默认字体。")
-            id_font = title_font = tags_font = page_font = ImageFont.load_default()
+            id_font = title_font = tags_font = page_font = ordinal_font = ImageFont.load_default()
 
         draw.rounded_rectangle((BASE_PADDING - 25, BASE_PADDING - 25, BASE_PADDING + max_content_width + 25,
                                 BASE_PADDING + max_content_height + 25), radius=30, fill=(0, 0, 0, 20))
@@ -439,6 +441,18 @@ class JmSearchPageManager:
 
             draw.rounded_rectangle((item_x - 10, item_y - 10, item_x + ITEM_WIDTH + 10, item_y + ITEM_HEIGHT + 10),
                                    radius=20, fill=(0, 0, 0, 30))
+
+            # 绘制背景序号
+            ordinal_text = str(index + 1)
+            ordinal_x = item_x + ITEM_WIDTH - int(15 * scale_factor)
+            ordinal_y = item_y + ITEM_HEIGHT // 2
+            draw.text(
+                (ordinal_x, ordinal_y),
+                ordinal_text,
+                font=ordinal_font,
+                fill=(0, 0, 0, 70),  # 使用半透明的深灰色
+                anchor="rm"  # 右对齐，垂直居中
+            )
 
             # 绘制封面
             try:
@@ -454,7 +468,7 @@ class JmSearchPageManager:
             text_x = item_x + COVER_SIZE[0] + int(20 * scale_factor)
             text_max_width = TEXT_AREA_WIDTH - int(40 * scale_factor)
             current_y = item_y + int(15 * scale_factor)
-            draw.text((text_x, current_y), album.get_album_id(), font=id_font, fill=(80, 80, 80))
+            draw.text((text_x, current_y), album.get_album_id(), font=id_font, fill=(0, 123, 255))
             current_y += id_font.size + int(20 * scale_factor)
             title_lines = _get_title_lines(album.get_title(), title_font, text_max_width)
             for line in title_lines: draw.text((text_x, current_y), line, font=title_font,

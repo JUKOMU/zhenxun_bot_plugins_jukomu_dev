@@ -1,4 +1,5 @@
 import asyncio
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -68,6 +69,7 @@ class JmDownload:
         """
 
         try:
+            cl.login('xxx', "xxx")
             detail = cl.get_album_detail(album_id)
             album_data.set_album(detail)
         except MissingAlbumPhotoException as e:
@@ -85,9 +87,9 @@ class JmDownload:
             )
         )
 
-        filepath = Path() / "resources" / "image" / "jmcomic" / f"{album_id}.jpg"
-        cover_path = filepath.absolute()
-        if not Path(cover_path).exists():
+        filepath = Path() / "resources" / "image" / "jmcomic"
+        cover_path = str(Path() / "resources" / "image" / "jmcomic" / f"{album_id}.jpg")
+        if not f"{album_id}.jpg" in os.listdir(filepath):
             await asyncio.to_thread(
                 cl.download_image, url, cover_path, decode_image=False
             )
