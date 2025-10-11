@@ -279,7 +279,7 @@ async def _(bot: Bot,
 
     # 发送图片
     try:
-        msg = await (MessageUtils.build_message([Path() / f"{BASE_PATH}/{uid}.jpg"])
+        msg = await (MessageUtils.build_message([Path() / f"{BASE_PATH}/{uid}.jpg", f"\n[回复'序号'查看和下载对应本子,回复'列表'获取搜索结果jm列表]"])
                      .send(reply_to=True))
         msg_id = msg.msg_ids[0].get('message_id')
     except Exception as e:
@@ -291,7 +291,7 @@ async def _(bot: Bot,
             reverse_img_path = await reverse_and_save_image(compress_img, Path() / f"{BASE_PATH}/{uid}.jpg")
 
             # 发送反转后的图片
-            msg = await (MessageUtils.build_message([reverse_img_path])
+            msg = await (MessageUtils.build_message([reverse_img_path, f"\n[回复'序号'查看和下载对应本子,回复'列表'获取搜索结果jm列表]"])
                          .send(reply_to=True))
             msg_id = msg.msg_ids[0].get('message_id')
             logger.info("JM搜索结果反转图片发送成功。")
@@ -317,8 +317,9 @@ async def _(bot: Bot,
 async def __(bot: Bot, session: Uninfo, event: MessageEvent, message: UniMsg):
     index = message.extract_plain_text()
     if not str(index).isdigit():
-        return
-    index = int(index)
+        if not str(index) == "列表":
+            return
+
     msg = await bot.get_msg(message_id=event.message_id)
     # 获取消息内容
     match = re.search(r'\[CQ:reply,id=(\d+)\]', msg.get('raw_message'))
@@ -331,21 +332,28 @@ async def __(bot: Bot, session: Uninfo, event: MessageEvent, message: UniMsg):
     match = re.search(r'jm搜索', text_content)
     if not match:
         return
-    connect = redis.Redis(host='localhost', port=6379, decode_responses=True, password='eaANO/x?qwev**hdsxc??u)/?')
+    connect = redis.Redis(host='localhost', port=6379, decode_responses=True, password='xxx')
     if not connect.exists(message_id):
         return await (MessageUtils.build_message([f"缓存过期, 请重新搜索"])
                       .send(reply_to=True))
     list = connect.lrange(message_id, 0, -1)
-    a_id = list[index - 1]
-    try:
-        await get_jm_info(bot, session, a_id)
-    except Exception as e:
-        logger.error("发送jm信息失败", session=session, e=e)
-    try:
-        return await jm_download(bot, session, None, a_id)
-    except Exception as e:
-        logger.error("下载失败", session=session, e=e)
-        return
+    if str(index) == "列表":
+        msg = ""
+        for i, a_id in enumerate(list, start=1):
+            msg = msg + f"{i}、JM[{a_id}]\n"
+        await MessageUtils.build_message([msg]).send(reply_to=True)
+    else:
+        index = int(index)
+        a_id = list[index - 1]
+        try:
+            await get_jm_info(bot, session, a_id)
+        except Exception as e:
+            logger.error("发送jm信息失败", session=session, e=e)
+        try:
+            return await jm_download(bot, session, None, a_id)
+        except Exception as e:
+            logger.error("下载失败", session=session, e=e)
+            return
 
 
 async def reverse_and_save_image(img: Image.Image, original_path: Path) -> Path:

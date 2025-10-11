@@ -6,10 +6,9 @@ import re
 import time
 from pathlib import Path
 
-import PIL
 import aiofiles
-from PIL import ImageOps
 from PIL import Image as PillowImage
+from PIL import ImageOps
 from arclet.alconna import AllParam
 from jmcomic import MissingAlbumPhotoException
 from nonebot.adapters.onebot.v11 import Bot
@@ -419,7 +418,6 @@ async def get_jm_info(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str
     album = album_data.get_album()
     album_jpg = f"{album_id}.jpg"
     path = Path() / "resources" / "image" / "jmcomic" / album_jpg
-    await compress_image(path.absolute())
 
     # 构造其他标题名
     other_name = album.name.replace(album.oname, "")
@@ -490,18 +488,28 @@ async def get_jm_info(bot: Bot, session: Uninfo, arparma: Arparma, album_id: str
         await MessageUtils.build_message([path, text_content]).send(reply_to=True)
         logger.info(f"本子 {album_id} 信息及原图发送成功。")
     except Exception as e:
-        logger.error(f"发送本子 {album_id} 信息失败，尝试发送反转图片。", e=e)
+        logger.error(f"发送本子 {album_id} 信息失败，尝试发送缩小图片。", e=e)
 
-        # 尝试反转图片并再次发送
-        reversed_path = await reverse_and_save_image(path)
-        if reversed_path:
-            try:
-                await MessageUtils.build_message([reversed_path, text_content]).send(reply_to=True)
-                logger.info(f"本子 {album_id} 信息及反转图片发送成功。")
-            except Exception as e_reverse:
-                logger.error(f"发送本子 {album_id} 的反转图片也失败了。", e=e_reverse)
-        else:
-            logger.error(f"未能创建本子 {album_id} 的反转图片，发送失败。")
+        # 尝试缩小图片并再次发送
+        await compress_image(path.absolute(), target_size=(200, 266), quality=100)
+        try:
+            await MessageUtils.build_message([path, text_content]).send(reply_to=True)
+            logger.info(f"本子 {album_id} 信息及缩小图片发送成功。")
+        except Exception as e:
+            logger.error(f"发送本子 {album_id} 的缩小图片失败，尝试发送反转图片。", e=e)
+            reversed_path = await reverse_and_save_image(path)
+            if reversed_path:
+                try:
+                    await MessageUtils.build_message([reversed_path, text_content]).send(reply_to=True)
+                    logger.info(f"本子 {album_id} 信息及反转图片发送成功。")
+                except Exception as e_reverse:
+                    logger.error(f"发送本子 {album_id} 的反转图片也失败了。", e=e_reverse)
+                    # 直接发送无图片信息
+                    await MessageUtils.build_message([text_content]).send(reply_to=True)
+            else:
+                logger.error(f"未能创建本子 {album_id} 的反转图片，发送失败。")
+                # 直接发送无图片信息
+                await MessageUtils.build_message([text_content]).send(reply_to=True)
 
 
 @_matcher.handle()
@@ -511,11 +519,11 @@ async def get_jm_info(bot: Bot, session: Uninfo, album_id: str) -> UniMessage | 
     try:
         await JmDownload.download_avatar(bot, session.user.id, group_id, album_id, album_data)
     except MissingAlbumPhotoException as e:
-        return
+        await MessageUtils.build_message(["本子不存在"]).send(
+            reply_to=True)
     album = album_data.get_album()
     album_jpg = f"{album_id}.jpg"
     path = Path() / "resources" / "image" / "jmcomic" / album_jpg
-    await compress_image(path.absolute())
 
     # 构造其他标题名
     other_name = album.name.replace(album.oname, "")
@@ -586,22 +594,31 @@ async def get_jm_info(bot: Bot, session: Uninfo, album_id: str) -> UniMessage | 
         await MessageUtils.build_message([path, text_content]).send(reply_to=True)
         logger.info(f"本子 {album_id} 信息及原图发送成功。")
     except Exception as e:
-        logger.error(f"发送本子 {album_id} 信息失败，尝试发送反转图片。", e=e)
+        logger.error(f"发送本子 {album_id} 信息失败，尝试发送缩小图片。", e=e)
 
-        # 尝试反转图片并再次发送
-        reversed_path = await reverse_and_save_image(path)
-        await compress_image(reversed_path.absolute(), target_kb=400)
-        if reversed_path:
-            try:
-                await MessageUtils.build_message([reversed_path, text_content]).send(reply_to=True)
-                logger.info(f"本子 {album_id} 信息及反转图片发送成功。")
-            except Exception as e_reverse:
-                logger.error(f"发送本子 {album_id} 的反转图片也失败了。", e=e_reverse)
-        else:
-            logger.error(f"未能创建本子 {album_id} 的反转图片，发送失败。")
+        # 尝试缩小图片并再次发送
+        await compress_image(path.absolute(), target_size=(200, 266), quality=100)
+        try:
+            await MessageUtils.build_message([path, text_content]).send(reply_to=True)
+            logger.info(f"本子 {album_id} 信息及缩小图片发送成功。")
+        except Exception as e:
+            logger.error(f"发送本子 {album_id} 的缩小图片失败，尝试发送反转图片。", e=e)
+            reversed_path = await reverse_and_save_image(path)
+            if reversed_path:
+                try:
+                    await MessageUtils.build_message([reversed_path, text_content]).send(reply_to=True)
+                    logger.info(f"本子 {album_id} 信息及反转图片发送成功。")
+                except Exception as e_reverse:
+                    logger.error(f"发送本子 {album_id} 的反转图片也失败了。", e=e_reverse)
+                    # 直接发送无图片信息
+                    await MessageUtils.build_message([text_content]).send(reply_to=True)
+            else:
+                logger.error(f"未能创建本子 {album_id} 的反转图片，发送失败。")
+                # 直接发送无图片信息
+                await MessageUtils.build_message([text_content]).send(reply_to=True)
 
 
-async def compress_image(image_path, target_kb=1000, quality=95):
+async def compress_image_file(image_path, target_kb=1000, quality=95):
     """
     异步压缩指定路径的图片，使得压缩后文件大小不超过 target_kb KB，
     如果原文件小于目标大小则不做操作。压缩过程中保持原比例缩放，并尽可能保证图片质量。
@@ -616,7 +633,7 @@ async def compress_image(image_path, target_kb=1000, quality=95):
         return
 
     # 异步打开图片
-    img = await asyncio.to_thread(PIL.Image.open, image_path)
+    img = await asyncio.to_thread(PillowImage.open, image_path)
     width, height = img.size
 
     low, high = 0.1, 1.0
@@ -646,6 +663,66 @@ async def compress_image(image_path, target_kb=1000, quality=95):
         # 异步写回原文件
         async with aiofiles.open(image_path, 'wb') as f:
             await f.write(best_data)
+        logger.info("图片压缩成功，已覆盖原文件。")
+    else:
+        logger.info("无法将图片压缩到目标大小。")
+
+
+async def compress_image(
+        image_path,
+        target_size: tuple[int, int] | None = None,
+        target_kb: int = 500,
+        quality: int = 95
+):
+    # 异步打开图片
+    image = await asyncio.to_thread(PillowImage.open, image_path)
+
+    def _compress_sync():
+        """同步的压缩核心逻辑，用于在线程中执行。"""
+        resized_image = image
+        if target_size:
+            try:
+                # 使用 LANCZOS 滤镜进行高质量的缩放
+                resized_image = image.resize(target_size, PillowImage.Resampling.LANCZOS)
+            except Exception as e:
+                logger.error(f"调整图片尺寸时发生错误: {e}")
+                return None
+
+        # 在调整尺寸后的图片上进行压缩
+        output_image = resized_image
+        if output_image.mode in ('RGBA', 'P'):
+            output_image = PillowImage.new("RGB", output_image.size, (255, 255, 255))
+            alpha_channel = resized_image.getchannel('A') if resized_image.mode == 'RGBA' else resized_image
+            output_image.paste(resized_image, (0, 0), alpha_channel)
+
+        final_bytes = None
+        min_quality = 10
+        current_quality = quality
+
+        while current_quality >= min_quality:
+            try:
+                buffer = io.BytesIO()
+                output_image.save(buffer, format="JPEG", quality=current_quality, optimize=True)
+
+                size_kb = buffer.tell() / 1024
+                final_bytes = buffer.getvalue()
+
+                if size_kb <= target_kb:
+                    return final_bytes
+
+                current_quality -= 5
+            except Exception as e:
+                logger.error(f"压缩图片时发生错误: {e}")
+                return None
+
+        return final_bytes
+
+    compressed_bytes = await asyncio.to_thread(_compress_sync)
+
+    if compressed_bytes:
+        # 异步写回原文件
+        async with aiofiles.open(image_path, 'wb') as f:
+            await f.write(compressed_bytes)
         logger.info("图片压缩成功，已覆盖原文件。")
     else:
         logger.info("无法将图片压缩到目标大小。")
