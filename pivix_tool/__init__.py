@@ -1,11 +1,17 @@
+import asyncio
 import configparser
 import io
 import os
+import re
 import time
+import zipfile
 from pathlib import Path
-import img2pdf
+
+import aiofiles
 import html2text
+import img2pdf
 import requests
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from arclet.alconna import Arg
 from nonebot.adapters.onebot.v11 import Bot, MessageEvent
 from nonebot.plugin import PluginMetadata
@@ -14,7 +20,6 @@ from nonebot_plugin_uninfo import Uninfo
 from zhenxun.configs.utils import BaseBlock, PluginCdBlock, PluginExtraData
 from zhenxun.services.log import logger
 from zhenxun.utils.message import MessageUtils
-from PIL import Image, ImageDraw, ImageFont
 
 BASE_PATH = "resources/pivix/image"
 HTMLTOTEXT = html2text.HTML2Text()
@@ -128,7 +133,8 @@ __plugin_meta__ = PluginMetadata(
 )
 
 _info_matcher1 = on_alconna(
-    Alconna("pid", Args[Arg("illust_id", str), Arg("index?", str), Arg("is_pdf?", str)], separators=' '), priority=5, block=True
+    Alconna("pid", Args[Arg("illust_id", str), Arg("index?", str), Arg("is_pdf?", str)], separators=' '), priority=5,
+    block=True
 )
 
 _info_matcher2 = on_alconna(
@@ -140,7 +146,8 @@ _info_matcher3 = on_alconna(
 )
 
 _info_matcher4 = on_alconna(
-    Alconna("puser-d", Args[Arg("user_id", str), Arg("num?", int), Arg("type?", str)], separators=' '), priority=5, block=True
+    Alconna("puser-d", Args[Arg("user_id", str), Arg("num?", int), Arg("type?", str)], separators=' '), priority=5,
+    block=True
 )
 
 _update_matcher = on_alconna(
@@ -266,6 +273,8 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
 
     # 图片元数据
     metadata_api_url = f"https://www.pixiv.net/ajax/illust/{illust_id}"
+    # 动图元数据
+    ugoira_meta_api_url = f"https://www.pixiv.net/ajax/illust/{illust_id}/ugoira_meta"
     get_params = {'lang': 'zh'}
     get_headers = {
         'User-Agent': HEADER_USERAGENT,
@@ -305,6 +314,11 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
 
     # 解析图片信息
     try:
+        # 2025/10/21 检查图片是否为动图
+        match = re.search(r'ugoira', metadata_response['body']['body']['urls']['original'])
+        if match:
+            # 该插画为动图
+            raise UgoiraException
         author_id = metadata_response['body']['body']['userId']
         author_name = metadata_response['body']['body']['userName']
         image_url = metadata_response['body']['body']['urls']['regular']
@@ -322,6 +336,96 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
                 page_no = index.result
         # 图片反代链接
         image_url_proxy = image_url.replace("i.pximg.net", "i.pixiv.cat")
+    except UgoiraException:
+        # 处理动图
+        ugoira_metadata_response = call_proxy(
+            method="GET",
+            target_url=ugoira_meta_api_url,
+            query_params=get_params,
+            custom_headers=get_headers,
+            cookies=get_cookies,
+            return_format='json'
+        )
+
+        if not ugoira_metadata_response:
+            await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
+            logger.info("pid解析失败")
+        try:
+            # 压缩包代理链接
+            original_src = ugoira_metadata_response['body']['body']['originalSrc']
+            # 动图参数
+            frames = ugoira_metadata_response['body']['body']['frames']
+            # 输出路径
+            output_zip_filename = f"{BASE_PATH}/{illust_id}_ugoira_original.zip"
+            output_gif_filename = f"{BASE_PATH}/{illust_id}_ugoira.gif"
+            package_zip_filename = f"{BASE_PATH}/{illust_id}_ugoira.zip"
+            # 压缩包反代链接
+            src_url_proxy = original_src.replace("i.pximg.net", "i.pixiv.cat");
+            zip_path = Path(output_zip_filename)
+            gif_path = Path(output_gif_filename)
+            package_path = Path(package_zip_filename)
+
+            if not gif_path.exists():
+                src_bytes = call_proxy(
+                    method="GET",
+                    target_url=src_url_proxy,
+                    return_format='binary'
+                )
+                if not src_bytes:
+                    logger.warning(f"下载PID {illust_id} 的动图资源文件失败")
+                    raise IOError("下载动图资源失败")
+                try:
+                    with open(output_zip_filename, "wb") as f:
+                        f.write(src_bytes)
+                    logger.info(f"pid动图ZIP保存成功: {illust_id}")
+                except IOError as e:
+                    logger.error(f"pid动图ZIP保存失败, {e}")
+                    return await MessageUtils.build_message(["图片下载失败"]).send(reply_to=True)
+
+            # 加载动图资源文件并转换为GIF
+            conversion_success = await convert_ugoira_zip_to_gif(
+                str(zip_path),
+                frames,
+                str(gif_path)
+            )
+
+            if not conversion_success:
+                return await MessageUtils.build_message(["动图处理失败"]).send(reply_to=True)
+            package = await package_file_to_zip(source_file_path=str(gif_path), zip_file_path=str(package_path))
+            if not package:
+                # 打包失败
+                return await MessageUtils.build_message(["动图打包失败"]).send(reply_to=True)
+            try:
+                # 发送gif文件
+                if session.group:
+                    await bot.upload_group_file(
+                        group_id=session.group.id,
+                        file=str(package_path.absolute()),
+                        name=package_path.name,
+                    )
+                else:
+                    await bot.upload_private_file(
+                        user_id=session.user.id,
+                        file=str(package_path.absolute()),
+                        name=package_path.name,
+                    )
+                logger.info(f"pid解析 {illust_id} [PDF发送成功]", arparma.header_result, session=session)
+            except Exception as pdf_e:
+                # PDF发送失败，就只回复一条错误信息
+                logger.error(f"发送gif失败: {pdf_e}")
+                await MessageUtils.build_message(["动图发送失败"]).send(reply_to=True)
+
+            # 删除临时ZIP文件
+            try:
+                zip_path.unlink()
+                logger.info(f"已删除临时动图ZIP文件: {zip_path.name}")
+            except OSError as e:
+                logger.error(f"删除临时ZIP文件失败: {e}")
+        except Exception:
+            await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
+            logger.info("pid解析失败")
+        # 直接结束流程
+        return
     except Exception:
         await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
         logger.info("pid解析失败")
@@ -373,6 +477,8 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
                 continue
 
         absolute_path = path.absolute()
+        # 2025/10/21 QQ聊天图片大小限制12MB 缩小到10MB
+        await compress_image(image_path=absolute_path, target_kb=10240, quality=100)
         downloaded_files.append(str(absolute_path))
         msg_elements.append(path)
 
@@ -387,7 +493,6 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
 
     # 尝试发送图片, 如果失败则转为PDF
     try:
-
         # 处理需要直接发送pdf的情况
         if page_no == "pdf":
             raise Exception
@@ -437,6 +542,7 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
             # PDF发送失败，就只回复一条错误信息
             logger.error(f"发送PDF也失败了: {pdf_e}")
             await MessageUtils.build_message(["图片发送失败，尝试转为PDF文件发送也失败了。"]).send(reply_to=True)
+
 
 @_info_matcher2.handle()
 async def __(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: Match[str]):
@@ -657,6 +763,7 @@ def get_tags_str(tag_list: list) -> str:
 
     return tag_str
 
+
 def validate_permission(session: Uninfo) -> bool:
     group_id = session.group.id
     if len(WORK_GROUP_LIST) > 0:
@@ -717,3 +824,204 @@ def create_text_image(text_content: str, width: int = 800, height: int = 600) ->
     except Exception as e:
         logger.error(f"创建文本图片时发生错误: {e}")
         return None
+
+
+async def compress_image(
+        image_path: str,
+        target_kb: int = 12 * 1024,  # 目标大小 12MB
+        quality: int = 90,  # 初始 JPEG 质量
+        step: int = 5,  # 每次迭代降低的质量值
+        min_quality: int = 70,  # 最低 JPEG 质量
+        max_iterations: int = 5,  # 最大迭代次数，防止死循环
+        safety_margin: float = 0.90  # 初始缩放的安全系数
+):
+    """
+    通过迭代预测和修正，智能地将图片压缩到目标大小以下。
+
+    策略:
+    1. 检查初始大小。
+    2. (仅JPEG) 尝试逐步降低质量来达到目标，这是最快的无损尺寸方式。
+    3. 如果降质后仍过大，进行一次基于比例的智能缩放（带安全系数）。
+    4. 如果仍然过大，进入快速修正循环，每次按一定比例缩小，直到达标或达到最大迭代次数。
+    """
+    target_size = target_kb * 1024
+
+    try:
+        # --- 步骤 1: 检查初始大小 ---
+        if await asyncio.to_thread(os.path.getsize, image_path) <= target_size:
+            logger.info("原图片已小于目标大小，无需压缩。")
+            return True
+
+        async with aiofiles.open(image_path, 'rb') as f:
+            content = await f.read()
+
+        img = await asyncio.to_thread(Image.open, io.BytesIO(content))
+
+        # 修正图片方向
+        if ImageOps:
+            img = await asyncio.to_thread(ImageOps.exif_transpose, img)
+
+        current_quality = quality
+
+        # --- 步骤 2: (仅JPEG) 优先尝试降低质量 ---
+        if img.format == 'JPEG':
+            logger.info("检测到JPEG格式，优先尝试降低质量...")
+            for q in range(quality, min_quality - 1, -step):
+                buffer = io.BytesIO()
+                await asyncio.to_thread(img.save, buffer, format='JPEG', quality=q, optimize=True)
+                current_content = buffer.getvalue()
+                if len(current_content) <= target_size:
+                    logger.info(f"通过降低质量到 {q} 成功将图片压缩到目标大小。")
+                    async with aiofiles.open(image_path, 'wb') as f:
+                        await f.write(current_content)
+                    return True
+            content = current_content  # 使用降质后的内容进行下一步
+            logger.info(f"质量降低至 {min_quality} 后，文件大小仍过大。准备缩放尺寸...")
+
+        # --- 步骤 3 & 4: 智能缩放与快速修正循环 ---
+        current_size = len(content)
+        img = await asyncio.to_thread(Image.open, io.BytesIO(content))  # 重新加载降质后的图片
+
+        for i in range(max_iterations):
+            if current_size <= target_size:
+                logger.info(f"在第 {i + 1} 次迭代中成功达到目标大小。")
+                break
+
+            # 核心：计算缩放比例
+            # 第一次迭代使用带安全系数的预测，后续迭代在前一次基础上微调
+            if i == 0:
+                scale = (target_size / current_size) ** 0.5 * safety_margin
+            else:
+                scale = 0.9  # 后续迭代，每次缩小10%的尺寸
+
+            new_width = int(img.width * scale)
+            new_height = int(img.height * scale)
+
+            if new_width < 1 or new_height < 1:
+                logger.warning("图片尺寸已缩到最小，无法继续压缩。")
+                return False
+
+            logger.info(f"迭代 {i + 1}/{max_iterations}: 缩放比例 {scale:.2f}，目标尺寸 {new_width}x{new_height}")
+
+            # 在线程中执行耗时的 resize 和 save
+            resized_img = await asyncio.to_thread(img.resize, (new_width, new_height))
+
+            buffer = io.BytesIO()
+            img_format = img.format or 'JPEG'
+            q = current_quality if img_format == 'JPEG' else 95
+            await asyncio.to_thread(resized_img.save, buffer, format=img_format, quality=q, optimize=True)
+
+            content = buffer.getvalue()
+            current_size = len(content)
+            img = resized_img  # 更新img对象为缩放后的，用于下一次迭代
+
+        else:  # for-else 结构，如果循环正常结束（未被break），则执行
+            logger.warning(f"达到最大迭代次数 {max_iterations} 后，文件大小仍超过目标。")
+            return False
+
+        # --- 最终写入 ---
+        async with aiofiles.open(image_path, 'wb') as f:
+            await f.write(content)
+
+        final_size_kb = len(content) / 1024
+        logger.info(f"图片压缩成功。最终大小: {final_size_kb:.2f} KB，尺寸: {img.width}x{img.height}")
+        return True
+
+    except Exception as e:
+        logger.error(f"图片压缩失败: {e}", exc_info=e)
+        return False
+
+
+class UgoiraException(Exception):
+    def __init__(self, *args):
+        super().__init__(*args)
+
+
+async def convert_ugoira_zip_to_gif(
+        zip_path: str,
+        frames_data: list,
+        output_gif_path: str
+) -> bool:
+    """
+    将 Pixiv Ugoira 的 ZIP 文件根据 frames 元数据合成为 GIF。
+
+    :param zip_path: 输入的 ugoira zip 文件路径。
+    :param frames_data: 从 Pixiv API 获取的 frames 列表。
+    :param output_gif_path: 输出的 GIF 文件路径。
+    :return: 成功返回 True，失败返回 False。
+    """
+    logger.info(f"开始转换 Ugoira 文件: {zip_path}")
+
+    def process_zip():
+        pil_frames = []
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                for frame_info in frames_data:
+                    frame_filename = frame_info['file']
+                    # 从zip文件中读取单帧的二进制数据
+                    with zf.open(frame_filename) as frame_file:
+                        frame_bytes = frame_file.read()
+                        # 使用Pillow打开图片
+                        img = Image.open(io.BytesIO(frame_bytes)).convert("RGBA")
+                        pil_frames.append(img)
+
+            if not pil_frames:
+                logger.error("未能从ZIP文件中加载任何帧。")
+                return False
+
+            # 使用第一帧作为基础，附加其余帧来创建GIF
+            # duration 是每一帧的毫秒数
+            # loop=0 表示无限循环
+            pil_frames[0].save(
+                output_gif_path,
+                save_all=True,
+                append_images=pil_frames[1:],
+                duration=[frame['delay'] for frame in frames_data],  # 为每一帧设置独立的延迟
+                loop=0,
+                optimize=True  # 开启优化以减小文件大小
+            )
+            logger.info(f"成功将 Ugoira 转换为 GIF: {output_gif_path}")
+            return True
+        except Exception as e:
+            logger.error(f"转换 Ugoira 动图失败: {e}", exc_info=e)
+            return False
+
+    # 使用 asyncio.to_thread 在另一个线程中运行上面的阻塞函数
+    return await asyncio.to_thread(process_zip)
+
+
+async def package_file_to_zip(
+        source_file_path: str,
+        zip_file_path: str,
+        archive_name: str = None
+) -> bool:
+    """
+    异步地将单个文件打包到一个 ZIP 压缩包中。
+
+    :param source_file_path: 要打包的源文件路径。
+    :param zip_file_path: 输出的 ZIP 文件路径。
+    :param archive_name: 文件在 ZIP 压缩包中的名字。如果为 None，则使用源文件名。
+    :return: 成功返回 True，失败返回 False。
+    """
+    logger.info(f"开始将文件 '{os.path.basename(source_file_path)}' 打包到 '{os.path.basename(zip_file_path)}'")
+
+    # 这是将在后台线程中运行的同步函数
+    def _create_zip():
+        try:
+            # 如果没有指定压缩包内的文件名，就使用源文件的基本名称
+            arcname = archive_name or os.path.basename(source_file_path)
+
+            # 使用 'w' 模式创建并写入ZIP文件，ZIP_DEFLATED 表示使用压缩
+            with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.write(source_file_path, arcname=arcname)
+
+            logger.info(f"文件成功打包: {zip_file_path}")
+            return True
+        except FileNotFoundError:
+            logger.error(f"打包失败：源文件未找到 '{source_file_path}'")
+            return False
+        except Exception as e:
+            logger.error(f"打包文件时发生未知错误: {e}", exc_info=e)
+            return False
+
+    return await asyncio.to_thread(_create_zip)
