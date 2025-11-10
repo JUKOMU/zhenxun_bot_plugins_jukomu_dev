@@ -1,6 +1,9 @@
 import asyncio
+import concurrent
+import concurrent.futures
 import configparser
 import io
+import math
 import os
 import re
 import time
@@ -105,21 +108,15 @@ __plugin_meta__ = PluginMetadata(
          解析pid=90457556的作品信息, 包含第二张插画的图片直链
           pinfo 90457556 2
         3.
-         获取画师简要信息, 画师主页, 画师作品数量
+         获取画师简要信息, 画师主页, 画师作品数量, 前6个作品
           puser 16985944
         4.
-         获取id=16985944的画师信息, 默认前50个作品, 返回html文件
+         获取id=16985944的画师信息, 第一页，每页50个
           puser-d 16985944
-         获取id=16985944的画师信息, 前100个作品, 返回html文件
-          puser-d 16985944 100
-         获取id=16985944的画师信息, 所有作品, 返回html文件
-          puser-d 16985944 all
-         获取id=16985944的画师信息, 默认前50个作品, 返回图片
-          puser-d 16985944 img
-         获取id=16985944的画师信息, 前100个作品, 返回图片
-          puser-d 16985944 100 img
-         获取id=16985944的画师信息, 所有作品, 返回图片
-          puser-d 16985944 all img
+         获取id=16985944的画师信息, 第二页
+          puser-d 16985944 2
+         获取id=16985944的画师信息, 返回html文件，包括所有作品，内置分页
+          puser-d 16985944 html
     """.strip(),
     extra=PluginExtraData(
         author="JUKOMU",
@@ -146,7 +143,7 @@ _info_matcher3 = on_alconna(
 )
 
 _info_matcher4 = on_alconna(
-    Alconna("puser-d", Args[Arg("user_id", str), Arg("num?", int), Arg("type?", str)], separators=' '), priority=5,
+    Alconna("puser-d", Args[Arg("user_id", str), Arg("num?", int)], separators=' '), priority=5,
     block=True
 )
 
@@ -704,25 +701,223 @@ async def ___(bot: Bot, session: Uninfo, arparma: Arparma, user_id: str):
 
 
 @_info_matcher4.handle()
-async def ____(bot: Bot, session: Uninfo, arparma: Arparma, user_id: str, num: Match[int], type: Match[str]):
+async def ____(bot: Bot, session: Uninfo, arparma: Arparma, user_id: str, num: Match[int]):
     if session.group:
         if not validate_permission(session):
             return
-    number = 50
-    type_str = "html"
+    # 页码
+    number = 1
+    is_html = False
     if num.available:
         if str(num.result).isdigit():
             # 数量有效
             number = num.result
         else:
             # 不是有效数字, 验证是否信息类型
-            if str(num.result) == "html" or str(num.result) == "img":
-                type_str = str(num.result)
+            if str(num.result) == "html":
+                is_html = True
 
-        if type.available:
-            # 验证是否信息类型
-            if str(num.result) == "html" or str(num.result) == "img":
-                type_str = str(num.result)
+    # 画师作品元数据
+    metadata_work_url = f"https://www.pixiv.net/ajax/user/{user_id}/works/latest"
+    # 画师信息元数据
+    metadata_user_url = f"https://www.pixiv.net/ajax/user/{user_id}"
+
+    get_params1 = {'lang': 'zh'}
+    get_params2 = {'lang': 'zh',
+                   'full': '1'}
+    get_headers = {
+        'User-Agent': HEADER_USERAGENT,
+        'Referer': HEADER_REFERER
+    }
+    get_cookies = {
+        'PHPSESSID': COOKIE_PHPSESSID
+    }
+
+    metadata_work_response = call_proxy(
+        method="GET",
+        target_url=metadata_work_url,
+        query_params=get_params1,
+        custom_headers=get_headers,
+        cookies=get_cookies,
+        return_format='json'
+    )
+    metadata_user_response = call_proxy(
+        method="GET",
+        target_url=metadata_user_url,
+        query_params=get_params2,
+        custom_headers=get_headers,
+        cookies=get_cookies,
+        return_format='json'
+    )
+    if not metadata_work_response or not metadata_user_response:
+        await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
+        logger.info("pid解析失败")
+
+    # 作品列表
+    author_name = ""
+    works = []
+    # 头像
+    avatar = ""
+    avatar_url = ""
+    avatar_url_proxy = ""
+    # 背景图像
+    background = ""
+    background_url = ""
+    background_url_proxy = ""
+
+    author_name = metadata_user_response['body']['body']['name']
+    illusts = metadata_work_response['body']['body']['illusts']
+    avatar_url = metadata_user_response['body']['body']['imageBig']
+    avatar_url_proxy = avatar_url.replace("i.pximg.net", "i.pixiv.cat")
+    try:
+        background_url = metadata_user_response['body']['body']['background']['url']
+        background_url_proxy = background_url.replace("i.pximg.net", "i.pixiv.cat")
+    except Exception:
+        background_url = ""
+        background_url_proxy = ""
+
+    work_id_strings = illusts.keys()
+    work_id_integers = [int(id_str) for id_str in work_id_strings]
+    work_id_integers.sort(reverse=True)
+    sorted_work_ids = work_id_integers
+    # 定义分页参数
+    page_size = 50
+    current_page = number
+    total_page = int(math.ceil(len(sorted_work_ids) / page_size))
+    start_index = (current_page - 1) * page_size
+    end_index = current_page * page_size
+    current_page_ids = sorted_work_ids[start_index:end_index]
+    if is_html:
+        # TODO 生成html
+        return
+
+    for illust_id in current_page_ids:
+        output_filename = f"{BASE_PATH}/{illust_id}S.png"
+        path = Path(output_filename)
+        absolute_path = path.absolute()
+        works.append(absolute_path)
+
+    # 依次下载
+    def download_worker(illust_id: str) -> dict:
+        """
+        同步下载单个图片的函数。
+        返回一个字典来表示结果，而不是在线程中执行 await 操作。
+        """
+        output_filename = f"{BASE_PATH}/{illust_id}S.png"
+        path = Path(output_filename)
+
+        if path.exists():
+            return {'status': 'skipped', 'id': illust_id}
+
+        try:
+            # 获取图片元数据
+            metadata_api_url = f"https://www.pixiv.net/ajax/illust/{illust_id}"
+            metadata_response = call_proxy(
+                method="GET",
+                target_url=metadata_api_url,
+                query_params=get_params1,
+                custom_headers=get_headers,
+                cookies=get_cookies,
+                return_format='json'
+            )
+            if not metadata_response:
+                return {'status': 'error', 'id': illust_id, 'reason': '元数据请求失败'}
+
+            # 解析图片URL
+            image_url = metadata_response['body']['body']['urls']['small']
+            image_url_proxy = image_url.replace("i.pximg.net", "i.pixiv.cat")
+
+            # 下载图片
+            image_bytes = call_proxy(
+                method="GET",
+                target_url=image_url_proxy,
+                return_format='binary'
+            )
+            if not image_bytes:
+                return {'status': 'error', 'id': illust_id, 'reason': '图片下载失败'}
+
+            # 保存图片
+            with open(output_filename, "wb") as f:
+                f.write(image_bytes)
+
+            logger.info(f"成功下载: {illust_id}")
+            return {'status': 'success', 'id': illust_id}
+
+        except Exception as e:
+            logger.error(f"处理 {illust_id} 时发生意外错误: {e}")
+            return {'status': 'error', 'id': illust_id, 'reason': f'意外错误: {e}'}
+
+    loop = asyncio.get_running_loop()
+    failed_tasks = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [
+            loop.run_in_executor(executor, download_worker, illust_id)
+            for illust_id in current_page_ids
+        ]
+        results = await asyncio.gather(*futures)
+
+    for result in results:
+        if result and result['status'] == 'error':
+            failed_tasks.append(result['id'])
+            logger.info(f"pid处理失败: {result['id']}, 原因: {result['reason']}")
+
+    if failed_tasks:
+        failed_ids_str = ", ".join(failed_tasks)
+        await MessageUtils.build_message([f"处理完成，但以下PID失败了: {failed_ids_str}"]).send(reply_to=True)
+
+    # 下载头像
+    output_filename = f"{BASE_PATH}/{user_id}-avatar.png"
+    path = Path(output_filename)
+
+    if not path.exists():
+        image_bytes = call_proxy(
+            method="GET",
+            target_url=avatar_url_proxy,
+            return_format='binary'
+        )
+        if image_bytes:
+            try:
+                with open(output_filename, "wb") as f:
+                    f.write(image_bytes)
+                    avatar = path.absolute()
+            except IOError as e:
+                logger.error(f"图片保存失败, {e}")
+    else:
+        avatar = path.absolute()
+    # 下载背景
+    output_filename = f"{BASE_PATH}/{user_id}-background.png"
+    path = Path(output_filename)
+    if background_url_proxy != "":
+        if not path.exists():
+            image_bytes = call_proxy(
+                method="GET",
+                target_url=background_url_proxy,
+                return_format='binary'
+            )
+            if image_bytes:
+                try:
+                    with open(output_filename, "wb") as f:
+                        f.write(image_bytes)
+                        background = path.absolute()
+                except IOError as e:
+                    logger.error(f"图片保存失败, {e}")
+        else:
+            background = path.absolute()
+    else:
+        background = None
+
+    result = await create_user_display_image(background,
+                                             avatar,
+                                             works,
+                                             author_name,
+                                             current_page,
+                                             total_page,
+                                             2000)
+    result.save((Path() / f"{BASE_PATH}/{session.user.id}-userd.png").absolute())
+    await compress_image(image_path=(Path() / f"{BASE_PATH}/{session.user.id}-userd.png").absolute(), target_kb=10240,
+                         quality=100)
+    await MessageUtils.build_message([Path() / f"{BASE_PATH}/{session.user.id}-userd.png"]).send(reply_to=True)
 
 
 @_update_matcher.handle()
@@ -1025,3 +1220,252 @@ async def package_file_to_zip(
             return False
 
     return await asyncio.to_thread(_create_zip)
+
+async def create_user_display_image(
+        bg_image_A: str | None,
+        avatar_image_B: str | None,
+        artwork_images_W: list[str],
+        author_name: str,
+        current_page: int,
+        total_pages: int,
+        total_width: int = 2000
+) -> Image.Image:
+    """
+    将用户的主页背景、头像、作品集和页码整合到一张图片中。(V3)
+    - 新增作品网格区域的圆角背景。
+    """
+
+    # --- 内部辅助函数定义 (无变动) ---
+
+    def _crop_top_square(image: Image.Image) -> Image.Image:
+        """从图片顶部中心裁剪出最大的正方形。"""
+        w, h = image.size
+        side = min(w, h)
+        left = (w - side) // 2
+        top = 0
+        right = left + side
+        bottom = side
+        return image.crop((left, top, right, bottom))
+
+    def _crop_to_circle(image: Image.Image) -> Image.Image:
+        """将正方形图片裁剪为圆形。"""
+        mask = Image.new('L', image.size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.ellipse((0, 0) + image.size, fill=255)
+
+        result = image.copy()
+        result.putalpha(mask)
+        return result
+
+    def _create_rounded_rectangle_mask(size: tuple[int, int], radius: int) -> Image.Image:
+        """创建一个顶部为圆角的遮罩。"""
+        mask = Image.new('L', size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle((0, 0, size[0], size[1] * 2), radius=radius, fill=255)
+        return mask
+
+    async def _process_artwork_image(image_path: str, box_size: int, radius: int) -> Image.Image:  # 新增 radius 参数
+        """(异步)处理单个作品图：读取、缩放并放置在带圆角背景的方块中。"""
+        try:
+            async with aiofiles.open(image_path, 'rb') as f:
+                content = await f.read()
+            image = await asyncio.to_thread(Image.open, io.BytesIO(content))
+            image = image.convert("RGBA")  # 确保图片有Alpha通道
+        except FileNotFoundError:
+            # 如果文件不存在，创建一个占位图
+            image = Image.new("RGBA", (box_size // 2, box_size // 2), "#C0C0C0")
+
+        original_w, original_h = image.size
+        if original_w == 0 or original_h == 0:  # 处理无效图片
+            image = Image.new("RGBA", (box_size // 2, box_size // 2), "#C0C0C0")
+            original_w, original_h = image.size
+
+        # 1. 创建一个完全透明的背景画布
+        rounded_bg = Image.new("RGBA", (box_size, box_size), (255, 255, 255, 0))
+        draw = ImageDraw.Draw(rounded_bg)
+
+        # 2. 在透明画布上绘制一个带颜色的圆角矩形
+        inset = 2  # 内缩1个像素
+        draw.rounded_rectangle(
+            (inset, inset, box_size - inset, box_size - inset),
+            radius=radius,
+            fill="#F0F0F0"  # 背景色
+        )
+
+        # 3. 缩放作品图以适应背景 (可以稍微缩小一点留出内边距)
+        inner_box_size = box_size - int(box_size * 0.05)  # 留出5%的内边距
+        ratio = min(inner_box_size / original_w, inner_box_size / original_h)
+        new_w, new_h = int(original_w * ratio), int(original_h * ratio)
+        resized_image = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        # 4. 将缩放后的图片居中粘贴到圆角背景上
+        paste_x = (box_size - new_w) // 2
+        paste_y = (box_size - new_h) // 2
+        # 使用 resized_image 作为遮罩，以保留作品图自身的透明度
+        rounded_bg.paste(resized_image, (paste_x, paste_y), resized_image)
+
+        return rounded_bg
+
+    def _generate_page_list(c_page: int, t_pages: int) -> list:
+        """根据当前页和总页数，生成用于显示的页码列表（带省略号）。"""
+        if t_pages <= 7:
+            return list(range(1, t_pages + 1))
+        page_list = [1]
+        if c_page > 4: page_list.append('...')
+        start = max(2, c_page - 1)
+        end = min(t_pages - 1, c_page + 1)
+        for i in range(start, end + 1): page_list.append(i)
+        if c_page < t_pages - 3: page_list.append('...')
+        page_list.append(t_pages)
+        return page_list
+
+    def _draw_pagination(draw: ImageDraw.Draw, x: int, y: int, width: int, p_list: list, c_page: int, scale: float):
+        """(新) 在指定位置居中绘制页码，当前页为圆形灰底白字。"""
+        try:
+            font_size = int(32 * scale)
+            font = ImageFont.truetype(os.path.join(os.path.dirname(__file__), "msyh.ttc"), size=font_size)
+        except IOError:
+            font = ImageFont.load_default()
+            font_size = 20
+
+        page_items = [str(p) for p in p_list]
+        item_widths = [draw.textlength(p, font=font) for p in page_items]
+        spacing = int(20 * scale)
+
+        total_text_width = sum(item_widths) + spacing * (len(page_items) - 1 if page_items else 0)
+        current_x = x + (width - total_text_width) / 2
+
+        for i, page in enumerate(page_items):
+            item_width = item_widths[i]
+            text_x = current_x
+            text_y = y + int(5 * scale)
+
+            if str(page) == str(c_page):
+                circle_radius = int(font_size * 0.8)
+                center_x = text_x + item_width / 2
+                center_y = text_y + font_size / 2
+                draw.ellipse(
+                    (center_x - circle_radius, center_y - circle_radius,
+                     center_x + circle_radius, center_y + circle_radius),
+                    fill="#808080"
+                )
+                draw.text((text_x, text_y), page, font=font, fill="white")
+            else:
+                draw.text((text_x, text_y), page, font=font, fill="black")
+            current_x += item_width + spacing
+
+    # --- 1. 动态尺寸计算 ---
+    scale_factor = total_width / 2000.0
+    avatar_size = int(200 * scale_factor)
+    author_name_font_size = int(40 * scale_factor)
+    artwork_box_size = int(194.5 * scale_factor)
+    artwork_corner_radius = int(15 * scale_factor)
+    gap = int(5 * scale_factor)
+    main_corner_radius = int(50 * scale_factor)
+    grid_corner_radius = int(20 * scale_factor)  # 网格背景的圆角半径
+    pagination_margin_top = int(50 * scale_factor)
+    pagination_height = int(60 * scale_factor)
+
+    # --- 2. 异步加载和处理所有图片 ---
+    bg_image, avatar_image, scaled_artworks_W = await asyncio.gather(
+        (lambda p: asyncio.to_thread(Image.open, p) if p else asyncio.sleep(0, result=None))(bg_image_A),
+        (lambda p: asyncio.to_thread(Image.open, p) if p else asyncio.sleep(0, result=None))(avatar_image_B),
+        asyncio.gather(*[_process_artwork_image(p, artwork_box_size, artwork_corner_radius) for p in artwork_images_W])
+    )
+
+    # --- 3. 进一步处理背景和头像 ---
+    scaled_bg_A = None
+    bg_A_h = int(450 * scale_factor)
+    if bg_image:
+        bg_image = bg_image.convert("RGBA")
+        scaled_bg_A = bg_image.resize((total_width, int(bg_image.height * total_width / bg_image.width)),
+                                      Image.Resampling.LANCZOS)
+        bg_A_h = scaled_bg_A.height
+
+    circular_avatar = None
+    if avatar_image:
+        avatar_image = avatar_image.convert("RGBA")
+        square_avatar = _crop_top_square(avatar_image)
+        resized_avatar = square_avatar.resize((avatar_size, avatar_size), Image.Resampling.LANCZOS)
+        circular_avatar = _crop_to_circle(resized_avatar)
+
+    # --- 4. 布局计算 ---
+    overlap_height = min(int(bg_A_h * 0.2), int(100 * scale_factor))
+    white_area_y = bg_A_h - overlap_height
+
+    avatar_y = white_area_y - avatar_size // 2
+    avatar_x = (total_width - avatar_size) // 2
+
+    temp_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    try:
+        author_font = ImageFont.truetype(os.path.join(os.path.dirname(__file__), "msyh.ttc"), size=author_name_font_size)
+    except IOError:
+        author_font = ImageFont.load_default()
+
+    author_name_bbox = temp_draw.textbbox((0, 0), author_name, font=author_font)
+    author_name_width = author_name_bbox[2] - author_name_bbox[0]
+    author_name_height = author_name_bbox[3] - author_name_bbox[1]
+
+    author_name_x = (total_width - author_name_width) // 2
+    author_name_y = avatar_y + avatar_size + int(15 * scale_factor)
+
+    grid_start_y = author_name_y + author_name_height + int(40 * scale_factor)
+
+    num_rows = math.ceil(len(scaled_artworks_W) / 10)
+    grid_height = num_rows * (artwork_box_size + gap) - (gap if num_rows > 0 else 0)
+
+    # 【新增】计算网格背景的精确尺寸和位置
+    grid_bg_x = gap
+    grid_bg_y = grid_start_y
+    grid_bg_width = total_width - 2 * gap
+    grid_bg_height = grid_height
+
+    pagination_y = grid_start_y + grid_height + pagination_margin_top
+
+    # --- 5. 计算总高度并创建画布 ---
+    total_height = grid_start_y + grid_height
+    if total_pages > 1:
+        total_height += pagination_margin_top + pagination_height
+
+    final_image = Image.new("RGBA", (total_width, total_height), "white")
+    draw = ImageDraw.Draw(final_image)
+
+    # --- 6. 按层级绘制 ---
+    # (1) 绘制背景
+    if scaled_bg_A:
+        final_image.paste(scaled_bg_A, (0, 0))
+
+    # (2) 绘制带圆角的白色内容区域
+    white_area_height = total_height - white_area_y
+    white_area = Image.new("RGBA", (total_width, white_area_height), "white")
+    mask = _create_rounded_rectangle_mask(white_area.size, main_corner_radius)
+    final_image.paste(white_area, (0, white_area_y), mask)
+
+    # # (3) 【新增】绘制圆角作品网格背景
+    # if scaled_artworks_W:  # 只有在有作品时才绘制背景
+    #     draw.rounded_rectangle(
+    #         (grid_bg_x, grid_bg_y, grid_bg_x + grid_bg_width, grid_bg_y + grid_bg_height),
+    #         radius=grid_corner_radius,
+    #         fill="#F0F0F0"  # 与单个作品背景色一致
+    #     )
+
+    # (4) 粘贴作品网格
+    for i, artwork in enumerate(scaled_artworks_W):
+        row, col = i // 10, i % 10
+        artwork_x = gap + col * (artwork_box_size + gap)
+        artwork_y = grid_start_y + row * (artwork_box_size + gap)
+        final_image.paste(artwork, (artwork_x, artwork_y), artwork)
+
+    # (5) 粘贴圆形头像
+    if circular_avatar:
+        final_image.paste(circular_avatar, (avatar_x, avatar_y), circular_avatar)
+
+    # (6) 绘制作者名
+    draw.text((author_name_x, author_name_y), author_name, font=author_font, fill="black")
+
+    # (7) 绘制页码
+    if total_pages > 1:
+        page_list_to_display = _generate_page_list(current_page, total_pages)
+        _draw_pagination(draw, 0, pagination_y, total_width, page_list_to_display, current_page, scale_factor)
+
+    return final_image.convert("RGB")
