@@ -293,7 +293,6 @@ async def _(bot: Bot, session: Uninfo, arparma: Arparma, illust_id: str, index: 
     if not metadata_response:
         await MessageUtils.build_message(["解析失败"]).send(reply_to=True)
         logger.info("pid解析失败")
-
     # 作者ID
     author_id = None
     # 作者名
@@ -1153,11 +1152,10 @@ async def convert_ugoira_zip_to_gif(
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 for frame_info in frames_data:
                     frame_filename = frame_info['file']
-                    # 从zip文件中读取单帧的二进制数据
                     with zf.open(frame_filename) as frame_file:
                         frame_bytes = frame_file.read()
-                        # 使用Pillow打开图片
-                        img = Image.open(io.BytesIO(frame_bytes)).convert("RGBA")
+                        img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
+                        img = img.quantize(colors=256, method=Image.Quantize.MAXCOVERAGE)
                         pil_frames.append(img)
 
             if not pil_frames:
@@ -1171,9 +1169,11 @@ async def convert_ugoira_zip_to_gif(
                 output_gif_path,
                 save_all=True,
                 append_images=pil_frames[1:],
-                duration=[frame['delay'] for frame in frames_data],  # 为每一帧设置独立的延迟
+                duration=[frame['delay'] for frame in frames_data],
                 loop=0,
-                optimize=True  # 开启优化以减小文件大小
+                optimize=False,  # 关闭压缩优化
+                disposal=2,
+                lossless=True
             )
             logger.info(f"成功将 Ugoira 转换为 GIF: {output_gif_path}")
             return True
@@ -1181,7 +1181,6 @@ async def convert_ugoira_zip_to_gif(
             logger.error(f"转换 Ugoira 动图失败: {e}", exc_info=e)
             return False
 
-    # 使用 asyncio.to_thread 在另一个线程中运行上面的阻塞函数
     return await asyncio.to_thread(process_zip)
 
 
